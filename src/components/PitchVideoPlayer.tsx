@@ -45,7 +45,7 @@ export function PitchVideoPlayer({videoUrl,releaseFrame,gloveFrame,totalFrames,f
   const timer=setTimeout(async()=>{try{
    if(!session.current)session.current=new LocalFrameInterpolation(videoUrl,timestamps);
    const result=await session.current.preview(point);if(id!==request.current)return;
-   if(result.quality.identicalSources)throw Error('相鄰來源畫面相同，無法確認新增的中間影像；請退回原始模式');
+   if(result.quality.identicalSources||result.changedA===0||result.changedB===0)throw Error('此區段無法產生可區分的中間影像；請退回原始模式，不以端點重複冒充補幀');
    const canvas=previewCanvas.current;if(!canvas)throw Error('插值畫面未就緒');canvas.width=result.width;canvas.height=result.height;
    const context=canvas.getContext('2d');if(!context)throw Error('無法繪製中間影像，請退回原始模式');context.putImageData(new ImageData(result.data,result.width,result.height),0,0);setPreview(result);setPreviewState('ready');
   }catch(error){if(id===request.current){setPreviewState('failed');setPreviewError(error instanceof Error?error.message:'補幀暫時不可用，請使用原始模式');}}},100);
