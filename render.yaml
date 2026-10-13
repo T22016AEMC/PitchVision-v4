@@ -1,23 +1,14 @@
+# Configuration reference only: create via Dashboard > Web Service > Existing Image.
+# Blueprint import itself requires a Git connection and is not used for this deployment.
 services:
   - type: web
-    runtime: static
+    runtime: image
     name: pitchvision-v4
-    branch: baseline-v4
-    envVars:
-      - key: NODE_VERSION
-        value: '22'
-      - key: SKIP_INSTALL_DEPS
-        value: 'true'
-    buildCommand: corepack pnpm install --frozen-lockfile && corepack pnpm run verify && corepack pnpm run build
-    staticPublishPath: dist
-    routes:
-      - type: rewrite
-        source: /*
-        destination: /index.html
-    headers:
-      - path: /*
-        name: X-Content-Type-Options
-        value: nosniff
-      - path: /*
-        name: Referrer-Policy
-        value: strict-origin-when-cross-origin
+    region: singapore
+    plan: free
+    healthCheckPath: /healthz
+    image:
+      url: ghcr.io/t22016aemc/pitchvision-v4:baseline
+      creds:
+        fromRegistryCreds:
+          name: pitchvision-ghcr-read

@@ -12,17 +12,16 @@
 
 ## 當前阻礙及下一步
 
-Render create_static_site 回應 400 repository URL invalid or unfetchable。已請使用者將私人新 repo 加入 Render GitHub App 的可存取範圍。
+原 Render Static Site 回應私人來源無法讀取。使用者明確拒絕 Render GitHub App／公開來源库；停止此方案，不再重試 Private Repo URL。
 
-授權後重試 Render Static Site（免費；不建立付費資源）：
+新方案：GitHub Actions 建置私人 GHCR 映像，Render Web Service Existing Image（Free），詳見 DEPLOYMENT.md。來源碼與測試片維持私人／本機。
 
 - workspace tea-db6qffon74is738k4q30
 - name pitchvision-v4
-- repo https://github.com/T22016AEMC/PitchVision-v4
-- branch baseline-v4 / autoDeploy yes
-- build `corepack pnpm install --frozen-lockfile && corepack pnpm run verify && corepack pnpm run build`
-- publish dist
-- NODE_VERSION=22 / SKIP_INSTALL_DEPS=true
+- image ghcr.io/t22016aemc/pitchvision-v4:sha-<commit>
+- region singapore / plan free / health /healthz
+- 私人 GHCR 拉取需由使用者在 Render registry credential 輸入 classic PAT read:packages
+- image-backed 服務不會隨標籤更新自動部署；用 sha tag 或手動 trigger_deploy
 
 部署 live 後在 BASE_URL=實際公開網址下執行 `node tests/browser.mjs`，讀取 test-results/public/acceptance.json，更新 ACCEPTANCE.md 與功能清單並推送。不可把測試影片放到 public。
 
