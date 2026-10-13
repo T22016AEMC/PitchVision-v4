@@ -1,0 +1,2 @@
+# Keep ZIP-derived bytes identical on Windows and Linux, including database hashes.
+* -text

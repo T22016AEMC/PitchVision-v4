@@ -9,6 +9,10 @@ const baseline = resolve('baseline/v3');
 await mkdir('test-results', { recursive: true });
 const hash = b => createHash('sha256').update(b).digest('hex');
 const results = { comparisons: 0, databases: [], preserved: [], cases: [] };
+const manifest=JSON.parse(await readFile('baseline/MANIFEST.json','utf8'));
+for (const entry of manifest.files) {
+  assert.equal(hash(await readFile(resolve(baseline,entry.path))),entry.sha256,`Original snapshot changed: ${entry.path}`);
+}
 async function walk(dir) {
   const files = [];
   for (const e of await readdir(dir, {withFileTypes:true})) {
