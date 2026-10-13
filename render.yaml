@@ -3,6 +3,11 @@ services:
     runtime: static
     name: pitchvision-v4
     branch: baseline-v4
+    envVars:
+      - key: NODE_VERSION
+        value: '22'
+      - key: SKIP_INSTALL_DEPS
+        value: 'true'
     buildCommand: corepack pnpm install --frozen-lockfile && corepack pnpm run verify && corepack pnpm run build
     staticPublishPath: dist
     routes:
