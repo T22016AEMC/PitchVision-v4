@@ -215,11 +215,11 @@ export class PhysicsMeasurementEngine {
     ) {
       const dt = timestamps[gloveFrame] - timestamps[releaseFrame];
       if (dt > 0) {
-        return Number(dt.toFixed(3));
+        return dt;
       }
     }
 
-    return Number((flightFrames / fps).toFixed(3));
+    return flightFrames / fps;
   }
 
   /**

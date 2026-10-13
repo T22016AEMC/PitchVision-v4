@@ -170,16 +170,16 @@ export function calculateVelocity(
     timestamps[gloveFrame] > timestamps[releaseFrame]
   ) {
     const dt = timestamps[gloveFrame] - timestamps[releaseFrame];
-    if (dt > 0.12 && dt < 2.0) {
+    if (Number.isFinite(dt) && dt > 0) {
       flightSeconds = dt;
     }
   }
 
-  const velocityMs = distanceMeters / Math.max(0.12, flightSeconds);
+  const velocityMs = distanceMeters / flightSeconds;
   const velocityKmh = Number((velocityMs * 3.6).toFixed(1));
   return {
     velocityKmh,
-    flightSeconds: Number(flightSeconds.toFixed(3)),
+    flightSeconds,
     flightFrames
   };
 }
@@ -550,12 +550,12 @@ export function calibrateWithAIVisual(
     ai_correction_velocity: Number((effectiveVelocity - primaryCandidate.velocity_kmh).toFixed(1)),
     db_baseline_spin: spinInference.baseSpinRateRpm,
     ai_correction_spin: conditioned?finalSpin-spinInference.baseSpinRateRpm:spinInference.rpmCorrectionApplied,
-    spin_rate_calibration_reason: `Angle correction applied: 出手角 ${observedPhysics.observed_release_angle_deg.toFixed(1)}° 修正 ${spinInference.rpmCorrectionApplied >= 0 ? '+' : ''}${spinInference.rpmCorrectionApplied} RPM (主體由 Top ${candidates.length} 候選位移反查加權內插)`,
+    spin_rate_calibration_reason: conditioned?'條件3D的Magnus合力約束有效RPM；總RPM使用Efficiency先驗，非唯一解':`Angle correction applied: 出手角 ${observedPhysics.observed_release_angle_deg.toFixed(1)}° 修正 ${spinInference.rpmCorrectionApplied >= 0 ? '+' : ''}${spinInference.rpmCorrectionApplied} RPM (主體由 Top ${candidates.length} 候選位移反查加權內插)`,
 
     db_baseline_axis: spinInference.baseSpinAxis,
     db_baseline_axis_decimal: spinInference.baseSpinAxisDecimal,
-    ai_correction_axis_minutes: spinInference.axisCorrectionMinutesApplied,
-    spin_axis_calibration_reason: `Angle correction applied: 出手角修正 ${spinInference.axisCorrectionMinutesApplied >= 0 ? '+' : ''}${spinInference.axisCorrectionMinutesApplied} 分鐘 (主體由圓周幾何平均推算)`,
+    ai_correction_axis_minutes: conditioned?Math.round((((finalAxisDecimal-spinInference.baseSpinAxisDecimal+18)%12)-6)*60):spinInference.axisCorrectionMinutesApplied,
+    spin_axis_calibration_reason: conditioned?'條件重建的側向／垂直Magnus合力方向；深度、尺度與Efficiency假設仍有限制':`Angle correction applied: 出手角修正 ${spinInference.axisCorrectionMinutesApplied >= 0 ? '+' : ''}${spinInference.axisCorrectionMinutesApplied} 分鐘 (主體由圓周幾何平均推算)`,
 
     db_baseline_ivb: primaryCandidate.ivb_inch,
     ai_correction_ivb: Number((observedIvb - primaryCandidate.ivb_inch).toFixed(1)),

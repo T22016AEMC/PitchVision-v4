@@ -176,7 +176,7 @@ export function alignAndStandardizeVideoSpatialContext(
   const safeFps = fps > 0 ? fps : 30;
 
   const flightFrames = Math.max(1, gloveFrame - releaseFrame);
-  let rawFlightSec = Number((flightFrames / safeFps).toFixed(3));
+  let rawFlightSec = flightFrames / safeFps;
 
   if (
     timestamps &&
@@ -185,8 +185,8 @@ export function alignAndStandardizeVideoSpatialContext(
     timestamps[gloveFrame] > timestamps[releaseFrame]
   ) {
     const dt = timestamps[gloveFrame] - timestamps[releaseFrame];
-    if (dt > 0.12 && dt < 1.8) {
-      rawFlightSec = Number(dt.toFixed(3));
+    if (Number.isFinite(dt) && dt > 0) {
+      rawFlightSec = dt;
     }
   }
 
@@ -266,14 +266,15 @@ export function reconstructPhysicsModelTrack(
     timestamps[gloveFrame] > timestamps[releaseFrame]
   ) {
     const dt = timestamps[gloveFrame] - timestamps[releaseFrame];
-    if (dt > 0.12 && dt < 1.8) {
+    if (Number.isFinite(dt) && dt > 0) {
       totalTimeSec = dt;
     }
   }
-  totalTimeSec = Math.max(0.22, Math.min(1.2, totalTimeSec));
+  if(!Number.isFinite(totalTimeSec)||totalTimeSec<=0)throw Error('無效模型飛行時間');
 
   // 初速 (m/s)
-  const v0Ms = Math.max(18.0, (velocityKmh || 130) / 3.6);
+  const v0Ms = velocityKmh / 3.6;
+  if(!Number.isFinite(v0Ms)||v0Ms<=0)throw Error('無效模型速度');
 
   // 有效自旋 (Active Spin RPM) 與馬格努斯升力係數 C_L
   const effRatio = Math.max(0.25, Math.min(1.0, spinEfficiencyPct / 100.0));
