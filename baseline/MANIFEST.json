@@ -1,0 +1,482 @@
+{
+  "zip": "PitchVision_V3.zip",
+  "zipSha256": "15c39e7cc6ad639bb3d2d4950682120a6a597b6eaba3cba9ffb0028d2ea6de8c",
+  "files": [
+    {
+      "path": ".env.example",
+      "bytes": 445,
+      "sha256": "b6d12c728de0aac8b0bc6239e53aa8088c1431bcb4f9a3d61e5e8a2df1c7c400",
+      "exports": []
+    },
+    {
+      "path": ".gitignore",
+      "bytes": 73,
+      "sha256": "db691f14fcf678985362a42c6aedb581e42cd6bb99962ce1b44aea460fb2a4df",
+      "exports": []
+    },
+    {
+      "path": "amateur_pitch_database_v3.json",
+      "bytes": 179843,
+      "sha256": "15512387e53bd75054129f06f3c62e5645fdd5fc644c26296fb43faa33c4a29b",
+      "exports": []
+    },
+    {
+      "path": "app.py",
+      "bytes": 49770,
+      "sha256": "6d7f9606010b04069ac031effbc650578fe6b582017612b0d26fb3ec20e55cb9",
+      "exports": [
+        "format_clock_time",
+        "generate_amateur_database",
+        "load_or_init_database",
+        "PitchCVModule",
+        "match_velocity_module",
+        "match_spin_movement_module",
+        "calibrate_with_ai_visual",
+        "match_pitch_data",
+        "main"
+      ]
+    },
+    {
+      "path": "bun.lock",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "exports": []
+    },
+    {
+      "path": "index.html",
+      "bytes": 1144,
+      "sha256": "01192027479d44f9c886a94d10b1da22872fca55d49498bb802041a983693b04",
+      "exports": []
+    },
+    {
+      "path": "metadata.json",
+      "bytes": 331,
+      "sha256": "02a465ad21a66c5809d11623cd86329eb667b4290803291eb3a59697139cd210",
+      "exports": []
+    },
+    {
+      "path": "package.json",
+      "bytes": 845,
+      "sha256": "afa032ccaf4549c5d7b341d6b64747e5518575a3620cb74166615d58c8a7ef4a",
+      "exports": []
+    },
+    {
+      "path": "public/assets/aistudio/.gitignore",
+      "bytes": 2,
+      "sha256": "cdbcae15105d6b781e620813c79c7e868740d4e9cc53ce6f5fcbbc12387adf4b",
+      "exports": []
+    },
+    {
+      "path": "public/favicon.jpg",
+      "bytes": 814650,
+      "sha256": "6237012fdbd8aca72895557e6513e00e698d7227c795b21bc7bee3735a9d6453",
+      "exports": []
+    },
+    {
+      "path": "public/flaming_jet_baseball.jpg",
+      "bytes": 814650,
+      "sha256": "6237012fdbd8aca72895557e6513e00e698d7227c795b21bc7bee3735a9d6453",
+      "exports": []
+    },
+    {
+      "path": "README.md",
+      "bytes": 542,
+      "sha256": "75c89dc92d96f475d1c34f3f6ac1f6bff9a58e6dae311554f818c21342ffa470",
+      "exports": []
+    },
+    {
+      "path": "src/App.tsx",
+      "bytes": 57481,
+      "sha256": "907b74cac0052501d19a5e9d61a2f71c2000686403846f47c136d6740ebab1d6",
+      "exports": []
+    },
+    {
+      "path": "src/appPyCode.ts",
+      "bytes": 51713,
+      "sha256": "f43939380a1beddcac093a7843c356cbdd97bc02605f118d306d489a3c98b614",
+      "exports": [
+        "APP_PY_CODE"
+      ]
+    },
+    {
+      "path": "src/assets/images/flaming_jet_baseball_1789640472028.jpg",
+      "bytes": 814650,
+      "sha256": "6237012fdbd8aca72895557e6513e00e698d7227c795b21bc7bee3735a9d6453",
+      "exports": []
+    },
+    {
+      "path": "src/baseballDetector.ts",
+      "bytes": 4916,
+      "sha256": "d32b826696ab4f03bff9bd6a95d149287a9ee1c0df5ff548d1c090331c7b77a8",
+      "exports": [
+        "BallCandidate",
+        "detectBaseballInFrame"
+      ]
+    },
+    {
+      "path": "src/baseballTracker.ts",
+      "bytes": 10780,
+      "sha256": "0c2e662e2484cc6d1d587dd6d5b0b36018276986580fb2205db318aed7ae062f",
+      "exports": [
+        "SparseTrackingOptions",
+        "SparseTrackingResult",
+        "trackBaseballSparse"
+      ]
+    },
+    {
+      "path": "src/components/CodeViewerModal.tsx",
+      "bytes": 3143,
+      "sha256": "5dae2f46087301cecca60791d9119111643193b408cfbe4f33573581978f496f",
+      "exports": [
+        "CodeViewerModal"
+      ]
+    },
+    {
+      "path": "src/components/DatabaseModal.tsx",
+      "bytes": 9906,
+      "sha256": "02be424868e57d07645cfd9c69bf636d8b43f363c2ff484cd863c3f7a520c682",
+      "exports": [
+        "DatabaseModal"
+      ]
+    },
+    {
+      "path": "src/components/FrameSlidersCard.tsx",
+      "bytes": 11174,
+      "sha256": "068533689797ad7087212ec965231ca27829f0f5ddeb5ed10821d049acf121b3",
+      "exports": [
+        "FrameSlidersCard"
+      ]
+    },
+    {
+      "path": "src/components/ManualAnchorPanel.tsx",
+      "bytes": 8221,
+      "sha256": "ce6427429d356e1ebe67a4e8ae5aeac293e822bbde6cf6b6061feceb6e2f09d5",
+      "exports": [
+        "ManualAnchorPanel"
+      ]
+    },
+    {
+      "path": "src/components/MetricsPanel.tsx",
+      "bytes": 39221,
+      "sha256": "83e98bff4ea91ea60e3c1bbadccaa35df99a9ddc7641b39b5f92c321d1f5e19d",
+      "exports": [
+        "MetricsPanel"
+      ]
+    },
+    {
+      "path": "src/components/PitcherSetupCard.tsx",
+      "bytes": 12570,
+      "sha256": "cdb556daa58a0f640ade30137719319cbf36a573747cd3eb4112432baad35197",
+      "exports": [
+        "PitcherSetupCard"
+      ]
+    },
+    {
+      "path": "src/components/PitchVideoPlayer.tsx",
+      "bytes": 22694,
+      "sha256": "1843b735d74bec585378b556545fd4b7cff987e079d8a0e06e536be02e4e2bd3",
+      "exports": [
+        "PitchVideoPlayer"
+      ]
+    },
+    {
+      "path": "src/components/PitchVisualizer.tsx",
+      "bytes": 31075,
+      "sha256": "45c99ef6b7dc88773b70832322223b9c3431fb07841c5660582fd190a857b823",
+      "exports": [
+        "CameraViewMode",
+        "PitchVisualizer"
+      ]
+    },
+    {
+      "path": "src/components/VideoFrameScrubber.tsx",
+      "bytes": 15580,
+      "sha256": "ea54cf3ad05e74a791d9425087d08e9a830f615c3b19690c73ccffd630811ce0",
+      "exports": [
+        "VideoFrameScrubber"
+      ]
+    },
+    {
+      "path": "src/components/VideoQualityCard.tsx",
+      "bytes": 3976,
+      "sha256": "26a1485ce5e2471d9ec0e6c3a2160d2919a2c61d13ffefba2b8c9ffea89284f5",
+      "exports": [
+        "VideoQualityCard"
+      ]
+    },
+    {
+      "path": "src/confidenceEngine.ts",
+      "bytes": 8215,
+      "sha256": "b9532413216373103059812c16b0c4b6ddb9567ddf3741e59aa4f8ad7e9decc1",
+      "exports": [
+        "ConfidenceInput",
+        "calculateUnifiedConfidence"
+      ]
+    },
+    {
+      "path": "src/index.css",
+      "bytes": 23,
+      "sha256": "42070e0b45bb201b2b838a52aaaa6e965f964e0b542d97f1fe517fe59c4b75a8",
+      "exports": []
+    },
+    {
+      "path": "src/main.tsx",
+      "bytes": 231,
+      "sha256": "5580d48b0fec68698a113d45a640b88d479dc35eb1f4b87c51f67c6cc81cee9b",
+      "exports": []
+    },
+    {
+      "path": "src/matchingEngine.ts",
+      "bytes": 27715,
+      "sha256": "cdec334157d5dd20cca9923ad64ff828875e5c86ce9efcd5ab8a396cd6fba5ca",
+      "exports": [
+        "PITCH_DATABASE",
+        "PITCH_TYPE_OPTIONS",
+        "STANDARD_DISTANCE_METERS",
+        "FrameDetectionResult",
+        "getTopDatabaseCandidates",
+        "formatClockTime",
+        "analyzePitchFramesFrameByFrame",
+        "calculateVelocity",
+        "matchVelocityModule",
+        "matchSpinMovementModule",
+        "calibrateWithAIVisual",
+        "matchPitchData"
+      ]
+    },
+    {
+      "path": "src/motionDetector.ts",
+      "bytes": 6567,
+      "sha256": "1740e8e24f56a5e4534b889092eb44c853a01a43f79e60657052cd5452c8dfcc",
+      "exports": [
+        "CandidateSearchOptions",
+        "extractMotionCandidates"
+      ]
+    },
+    {
+      "path": "src/pitchDatabase.json",
+      "bytes": 11416330,
+      "sha256": "eb1db6c2ef8d1a9ace8b559ac0c31071fb17d0c60a2f562a4ddf5948c84db003",
+      "exports": []
+    },
+    {
+      "path": "src/services/autoFrameDetectionEngine.ts",
+      "bytes": 21150,
+      "sha256": "d1a31fb944db854739362c05e79e61fe15950a90236710093914235489513ad6",
+      "exports": [
+        "AutoFrameDetectionInput",
+        "AutoFrameDetectionOutput",
+        "AutoFrameDetectionEngine"
+      ]
+    },
+    {
+      "path": "src/services/ballCandidateDetector.ts",
+      "bytes": 6321,
+      "sha256": "527e78b017058561a3d72397e8135aab111ef2fffe8d88f3d8fd92f8dd64eeac",
+      "exports": [
+        "CandidateRegion",
+        "BallVisualCandidate",
+        "CandidateSearchContext",
+        "detectBallCandidatesInFrame"
+      ]
+    },
+    {
+      "path": "src/services/ballDetectionEngine.ts",
+      "bytes": 6257,
+      "sha256": "6fb1c1c78ea103f3e1b43a02899ef76b4a900e48b6e725bc97abddc8fbc94332",
+      "exports": [
+        "BallDetectionEngineOptions",
+        "BallDetectionEngine"
+      ]
+    },
+    {
+      "path": "src/services/movementDatabaseMatcher.ts",
+      "bytes": 13456,
+      "sha256": "7e9d717bb98a5acbb10ae2d014c9b55a00149b8aca0945a8afbeeff294b2e970",
+      "exports": [
+        "DEFAULT_MATCHER_CONFIG",
+        "MatcherInput",
+        "MatcherResult",
+        "MovementDatabaseMatcher"
+      ]
+    },
+    {
+      "path": "src/services/physicsMeasurementEngine.ts",
+      "bytes": 15591,
+      "sha256": "ee08efc16a54eee542107199926b978c261448a8cbb7a1007d2341d2103c6b27",
+      "exports": [
+        "PhysicsMeasurementInput",
+        "PhysicsMeasurementEngine"
+      ]
+    },
+    {
+      "path": "src/services/publicVideoIngestionService.ts",
+      "bytes": 2260,
+      "sha256": "d2dc81d55a5bd3d0f97ca272a815350cdd0f1d7cd936e8b2916e62d9346b1d26",
+      "exports": [
+        "PublicVideoImportMetadata",
+        "IngestedVideoPitchCandidate",
+        "PublicVideoIngestionService"
+      ]
+    },
+    {
+      "path": "src/services/robustTemporalTracker.ts",
+      "bytes": 16311,
+      "sha256": "e881f431dbbad97f918c497466b1448be1d4cacab9bdbf6b580d2524d4cb65e0",
+      "exports": [
+        "TrackingPipelineOptions",
+        "TrackingPipelineResult",
+        "RobustTemporalTracker"
+      ]
+    },
+    {
+      "path": "src/services/spinInferenceEngine.ts",
+      "bytes": 10696,
+      "sha256": "872ce3fa6820c83bea38e390dda18abd441b125e065b9a9e3100be3f389ceeac",
+      "exports": [
+        "DEFAULT_RELEASE_CORRECTION_CONFIG",
+        "SpinInferenceInput",
+        "InferredSpinResult",
+        "SpinInferenceEngine"
+      ]
+    },
+    {
+      "path": "src/services/syntheticPitchGenerator.ts",
+      "bytes": 5531,
+      "sha256": "c454b4d35ad0013b529ac7c6d10f3b35051aa52037a984ee08f4dc8e43a92606",
+      "exports": [
+        "SyntheticPitchGeneratorOptions",
+        "DatabaseMetadata",
+        "SyntheticPitchGenerator"
+      ]
+    },
+    {
+      "path": "src/services/trajectoryFitEngine.ts",
+      "bytes": 3482,
+      "sha256": "906efc330d8b44319898040ce52acd2f77f7466f21047f055ece6ab18d150718",
+      "exports": [
+        "TrajectoryFitInput",
+        "TrajectoryFitEngine"
+      ]
+    },
+    {
+      "path": "src/services/trajectoryValidationService.ts",
+      "bytes": 8801,
+      "sha256": "2e9870f074315f9354474643803f924e0540130e54c2073dda3fcb8d127c2d43",
+      "exports": [
+        "ValidationInput",
+        "TrajectoryValidationResult",
+        "validateAndReconstructVideoTrack"
+      ]
+    },
+    {
+      "path": "src/services/videoLoadService.ts",
+      "bytes": 6248,
+      "sha256": "7fc5c727080e2c05d52a046c7329ffaa3a0b8bc4fe897e7c6d1d4474698b0547",
+      "exports": [
+        "VideoLoadStatus",
+        "LoadedVideoSession",
+        "VideoLoadService"
+      ]
+    },
+    {
+      "path": "src/services/videoMetadataService.ts",
+      "bytes": 4138,
+      "sha256": "63f44e7fa903b616fcaefc3b5382c4f1ba37428c8b04e82c654e70184ace9fd2",
+      "exports": [
+        "VideoMetadata",
+        "VideoQualityAssessment",
+        "probeVideoFps",
+        "assessVideoQuality",
+        "VideoMetadataService"
+      ]
+    },
+    {
+      "path": "src/services/videoTimingService.ts",
+      "bytes": 7188,
+      "sha256": "9728ba15c77bd7c0d6064188f84b6f2196890a15df9f07b578dcdba992ea4b57",
+      "exports": [
+        "VideoTimingService"
+      ]
+    },
+    {
+      "path": "src/spatialCalibration.ts",
+      "bytes": 17692,
+      "sha256": "058413ac6ffee6b03a4207f1d4d1ccceefdf1d04d2f7980860fcdb18d4a49b56",
+      "exports": [
+        "STANDARD_GLOVE_DISTANCE_METERS",
+        "DEFAULT_PITCHER_BIOMETRICS",
+        "computePitcherBiometrics",
+        "calibrate3DSpatialContext",
+        "alignAndStandardizeVideoSpatialContext",
+        "PhysicsReconstructionParams",
+        "reconstructPhysicsModelTrack",
+        "extractBaseballTrajectoryPoints"
+      ]
+    },
+    {
+      "path": "src/trajectoryProcessor.ts",
+      "bytes": 6937,
+      "sha256": "26d86b44679350053b3d39abb219de851b7fcf8e153475f82bdb646669b95ad7",
+      "exports": [
+        "TrajectoryReconstructOptions",
+        "reconstructVideoTrack"
+      ]
+    },
+    {
+      "path": "src/types.ts",
+      "bytes": 16151,
+      "sha256": "f81502a882c81c2565b89bd069b070b3170eba5360c5c612d685239de0b494ce",
+      "exports": [
+        "CameraViewMode",
+        "PitcherBiometrics",
+        "PitchDistanceConfig",
+        "DecodedVideoFrame",
+        "VideoTiming",
+        "VideoQuality",
+        "ReleaseCandidate",
+        "BallCandidate",
+        "BallObservation",
+        "BaseballTrackPoint",
+        "TrackStatus",
+        "VideoTrackMetrics",
+        "TrajectoryValidation",
+        "PitchRecord",
+        "DatabaseFrameTrajectoryPoint",
+        "DatabaseMatchCandidate",
+        "VelocityMatchModuleResult",
+        "SpinMovementMatchModuleResult",
+        "SpatialCalibrationInfo",
+        "TrajectoryPoint",
+        "ManualAnchorInput",
+        "UnifiedConfidenceScores",
+        "MatchResult",
+        "ObservedPhysicsMetrics",
+        "TrajectoryFitMetrics",
+        "MeasurementUncertainty",
+        "AnalysisBasisInfo",
+        "MovementMatcherConfig",
+        "ReleaseAngleCorrectionConfig",
+        "MotionCandidate"
+      ]
+    },
+    {
+      "path": "tsconfig.json",
+      "bytes": 508,
+      "sha256": "e93e15c3794e43a117964ea191ae985cbedea70c41d3d82b2e20aa8d07374fe4",
+      "exports": []
+    },
+    {
+      "path": "vite.config.ts",
+      "bytes": 708,
+      "sha256": "c7b7cc4b3a6b6a08f0a4fb916bb4d4e41804d5767611bce43d4c1ad53a198192",
+      "exports": []
+    },
+    {
+      "path": "__pycache__/app.cpython-310.pyc",
+      "bytes": 24487,
+      "sha256": "23a30188d5db3eccda21de929f5b0a0dd177e3d8c80279fe758978b80cd7501a",
+      "exports": []
+    }
+  ]
+}

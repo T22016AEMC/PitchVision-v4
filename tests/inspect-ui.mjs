@@ -1,0 +1,18 @@
+import { chromium } from '@playwright/test';
+import { mkdir, writeFile } from 'node:fs/promises';
+await mkdir('test-results',{recursive:true});
+const browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH || 'C:/Users/T22016/AppData/Local/ms-playwright/chromium-1194/chrome-win/chrome.exe',headless:true});
+const page=await browser.newPage({viewport:{width:390,height:844},isMobile:true,hasTouch:true});
+const errors=[];page.on('pageerror',e=>errors.push(e.message));
+await page.goto(process.env.BASE_URL || 'http://127.0.0.1:4173',{waitUntil:'networkidle'});
+await page.screenshot({path:'test-results/home-mobile.png',fullPage:true});
+console.log(await page.locator('body').innerText());
+console.log('overflow',await page.evaluate(()=>({width:innerWidth,scroll:document.documentElement.scrollWidth,offenders:[...document.querySelectorAll('*')].filter(e=>e.getBoundingClientRect().right>innerWidth+1).slice(0,15).map(e=>[e.tagName,e.id,e.className])})));
+await page.locator('#video-upload-input').setInputFiles('../test videos/直球.mp4');
+await page.waitForTimeout(2500);
+await page.screenshot({path:'test-results/upload-mobile.png',fullPage:true});
+await writeFile('test-results/ui-inspection.txt',await page.locator('body').innerText());
+console.log('videos',await page.locator('video').evaluateAll(v=>v.map(e=>({width:e.videoWidth,height:e.videoHeight,duration:e.duration,ready:e.readyState,error:e.error?.message}))));
+console.log('controls',await page.locator('input,select,button').evaluateAll(es=>es.map(e=>({tag:e.tagName,id:e.id,type:e.type,label:e.textContent?.trim().slice(0,70),value:e.value,title:e.title}))));
+console.log({errors});
+await browser.close();

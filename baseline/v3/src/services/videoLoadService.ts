@@ -1,0 +1,193 @@
+import { VideoTiming } from '../types';
+import { VideoTimingService } from './videoTimingService';
+import { VideoMetadataService, VideoQualityAssessment } from './videoMetadataService';
+
+export type VideoLoadStatus = 'idle' | 'uploading' | 'processing_metadata' | 'ready' | 'failed';
+
+export interface LoadedVideoSession {
+  objectUrl: string;
+  fileName: string;
+  mimeType: string;
+  width: number;
+  height: number;
+  durationSec: number;
+  actualFps: number;
+  fpsSource: VideoTiming['fpsSource'];
+  isFpsEstimated: boolean;
+  isVFR: boolean;
+  totalFrames: number;
+  timestamps: number[];
+  qualityAssessment: VideoQualityAssessment;
+  initialReleaseFrame: number;
+  initialGloveFrame: number;
+}
+
+const SUPPORTED_VIDEO_MIMES = [
+  'video/mp4',
+  'video/quicktime',
+  'video/x-m4v',
+  'video/webm',
+  'video/ogg',
+  'video/mov'
+];
+
+/**
+ * VideoLoadService (統一影片載入與生命週期控制器)
+ * 負責：
+ * 1. 嚴格管理 Object URL (載入新影片前必定 revoke 舊 URL，避免記憶體洩漏與狀態殘留)
+ * 2. 單次上傳完整完成：驗證 MIME -> 建立 Object URL -> offscreen video preload metadata -> 探測 FPS 與 frame count -> 回傳 ready state
+ * 3. 明確區分 वास्तविक FPS 與 FPS ESTIMATED
+ */
+export class VideoLoadService {
+  private static activeObjectUrl: string | null = null;
+
+  /**
+   * 釋放先前的 Object URL
+   */
+  static revokePreviousObjectUrl(urlToRevoke?: string | null): void {
+    const target = urlToRevoke || this.activeObjectUrl;
+    if (target && target.startsWith('blob:')) {
+      try {
+        URL.revokeObjectURL(target);
+      } catch (e) {
+        console.warn('Failed to revoke object URL:', e);
+      }
+    }
+    if (!urlToRevoke || urlToRevoke === this.activeObjectUrl) {
+      this.activeObjectUrl = null;
+    }
+  }
+
+  /**
+   * 驗證是否為支援的影片檔案格式
+   */
+  static isSupportedVideoFile(file: File): boolean {
+    if (file.type && SUPPORTED_VIDEO_MIMES.includes(file.type.toLowerCase())) {
+      return true;
+    }
+    const ext = file.name.split('.').pop()?.toLowerCase() || '';
+    return ['mp4', 'mov', 'm4v', 'webm', 'ogv'].includes(ext);
+  }
+
+  /**
+   * 完整單一流程載入使用者上傳之影片檔案
+   */
+  static async loadVideoFile(
+    file: File,
+    onStatusChange?: (status: VideoLoadStatus, message: string) => void
+  ): Promise<LoadedVideoSession> {
+    if (!this.isSupportedVideoFile(file)) {
+      onStatusChange?.('failed', '不支援此影片格式，請上傳 MP4、MOV 或 WebM 影片。');
+      throw new Error('不支援此影片格式，請確認檔案為 MP4 / MOV / WebM。');
+    }
+
+    onStatusChange?.('uploading', `正在讀取影片檔案 (${file.name})...`);
+
+    // 1. 釋放前一支影片的 Object URL
+    this.revokePreviousObjectUrl();
+
+    // 2. 建立新的 Object URL
+    const objectUrl = URL.createObjectURL(file);
+    this.activeObjectUrl = objectUrl;
+
+    onStatusChange?.('processing_metadata', '正在解析影片解析度、時長與時間戳 (Metadata)...');
+
+    // 3. 建立獨立 probe video element 並等待 loadedmetadata
+    const probeVideo = document.createElement('video');
+    probeVideo.preload = 'metadata';
+    probeVideo.muted = true;
+    probeVideo.playsInline = true;
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const timeoutId = window.setTimeout(() => {
+          cleanup();
+          reject(new Error('影片無法讀取，逾時或編碼不支援，請確認格式。'));
+        }, 10000);
+
+        const cleanup = () => {
+          window.clearTimeout(timeoutId);
+          probeVideo.onloadedmetadata = null;
+          probeVideo.onerror = null;
+        };
+
+        probeVideo.onloadedmetadata = () => {
+          cleanup();
+          resolve();
+        };
+
+        probeVideo.onerror = () => {
+          cleanup();
+          reject(new Error('影片無法讀取，請確認格式。'));
+        };
+
+        probeVideo.src = objectUrl;
+        probeVideo.load();
+      });
+    } catch (err) {
+      this.revokePreviousObjectUrl(objectUrl);
+      const msg = err instanceof Error ? err.message : '影片無法讀取，請確認格式。';
+      onStatusChange?.('failed', msg);
+      throw new Error(msg);
+    }
+
+    const width = probeVideo.videoWidth || 720;
+    const height = probeVideo.videoHeight || 1280;
+    const durationSec =
+      probeVideo.duration && Number.isFinite(probeVideo.duration) && probeVideo.duration > 0
+        ? Number(probeVideo.duration.toFixed(3))
+        : 5.0;
+
+    // 4. 探測真實 FPS 與時間戳
+    const timing = await VideoTimingService.probeVideoTiming(probeVideo, file.name);
+    const actualFps = timing.actualFps;
+    const isFpsEstimated = timing.fpsSource === 'estimated';
+    const totalFrames = Math.max(15, timing.totalFrames || Math.round(durationSec * actualFps));
+
+    // 5. 評估影片品質
+    const qualityAssessment = VideoMetadataService.assessVideoQuality(
+      width,
+      height,
+      actualFps,
+      durationSec
+    );
+    if (isFpsEstimated) {
+      qualityAssessment.warnings = [
+        ...qualityAssessment.warnings,
+        `容器未提供明確幀率標籤，目前使用估計幀率 (${actualFps} FPS [FPS ESTIMATED])`
+      ];
+    }
+
+    // 6. 預設初始檢視區間 (標示為 Reference Estimate，非 AI Detection)
+    const initialReleaseFrame = Math.min(
+      Math.round(totalFrames * 0.25),
+      Math.max(2, Math.round(actualFps * 0.35))
+    );
+    const expectedFlightFrames = Math.max(5, Math.round(actualFps * 0.48));
+    const initialGloveFrame = Math.min(totalFrames - 1, initialReleaseFrame + expectedFlightFrames);
+
+    // 清理臨時 probe element (保留 objectUrl 給主播放器)
+    probeVideo.removeAttribute('src');
+    probeVideo.load();
+
+    onStatusChange?.('ready', `影片載入完成 (${width}x${height} @ ${actualFps} FPS)`);
+
+    return {
+      objectUrl,
+      fileName: file.name,
+      mimeType: file.type || 'video/mp4',
+      width,
+      height,
+      durationSec,
+      actualFps,
+      fpsSource: timing.fpsSource,
+      isFpsEstimated,
+      isVFR: timing.isVFR,
+      totalFrames,
+      timestamps: timing.timestamps,
+      qualityAssessment,
+      initialReleaseFrame,
+      initialGloveFrame
+    };
+  }
+}
