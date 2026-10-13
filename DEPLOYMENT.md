@@ -4,6 +4,9 @@ React / TypeScript 影片載入、追蹤及物理計算全部在瀏覽器本機�
 
 ## 設定
 
+- 正式網址：https://pitchvision-v4-baseline.onrender.com
+- Render service：srv-db74o5rncjis73fgq31g（Static Site）
+- Dashboard：https://dashboard.render.com/static/srv-db74o5rncjis73fgq31g
 - Repository：https://github.com/T22016AEMC/PitchVision-v4 （Public）
 - Branch：baseline-v4
 - Root Directory：留空
@@ -20,7 +23,7 @@ React / TypeScript 影片載入、追蹤及物理計算全部在瀏覽器本機�
 執行 `pnpm run verify`、`pnpm run build`，commit 並 push `origin baseline-v4`。Render 也執行相同驗證，通過才發布 dist。公開影片驗收：
 
 ```powershell
-$env:BASE_URL='https://YOUR-STATIC-SITE.onrender.com'
+$env:BASE_URL='https://pitchvision-v4-baseline.onrender.com'
 pnpm run test:e2e
 ```
 

@@ -1,7 +1,7 @@
 services:
   - type: web
     runtime: static
-    name: pitchvision-v4
+    name: pitchvision-v4-baseline
     branch: baseline-v4
     buildCommand: corepack pnpm install --frozen-lockfile && corepack pnpm run verify && corepack pnpm run build
     staticPublishPath: dist

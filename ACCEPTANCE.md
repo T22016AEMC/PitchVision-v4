@@ -33,6 +33,14 @@
 
 ## 公開驗收與尚未完成項目
 
-目前尚未公開部署，沒有可交付的 HTTPS 網址。部署後再更新此段及公開測試紀錄。
+公開網址：https://pitchvision-v4-baseline.onrender.com
+
+Render Static Site `srv-db74o5rncjis73fgq31g`，首部署 `dep-db74o6bncjis73fgq3og` 狀態 live。Render 上完成 pnpm install、TypeScript、256組回歸及正式 Build。
+
+2026-10-13 正式公開 HTTPS 驗收完成，使用桌面 Chrome 手機尺寸／觸控模擬，17 項檢查通過、pageErrors 為空。首頁在320/390/430/768/1440px無水平溢出；兩部真實影片獨立完成上傳、播放暫停、自動搜尋、追蹤與原科學分析、結果、圖表視角／播放／重置／雙軌開關、出手手動±1、重複選片。兩片 metadata 分別為720×1280、6.773333s及6.53s。結果與上表本機數據一致。
+
+公開站資料庫搜尋與1080筆JSON下載、Python程式碼檢視／下載、損壞MP4錯誤、缺demo提示皆通過。完整正式紀錄在本機 `test-results/public/acceptance.json`，畫面證據不提交。
+
+網站可匿名透過公網HTTPS開啟，不依賴localhost或同一Wi-Fi。實際手機行動網路／不同網路的物理裝置測試尚未執行，不能以桌面驗收宣稱完成。
 
 尚未完成真實 iPhone／Android、多網路／行動網路、長影片／4K 壓力測試、Python Streamlit 獨立執行。原始 demo 缺檔；科學與座標限制見 SCIENTIFIC_ISSUES.md。不宣稱全部驗收通過。
