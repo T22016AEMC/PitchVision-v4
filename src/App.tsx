@@ -1,3 +1,5 @@
+import { SelectedEvents,SelectedEvent,PositionKind,describePosition,selectEvent,eventAnalysisView } from './services/analysisTimeline';
+import { hasUsableSourceTimes, manualAnalysisReason } from './services/manualAnalysisReadiness';
 import { ScientificInfoPanel } from './components/ScientificInfoPanel';
 import { CameraGeometry, ImagePoint, calibrateGroundReference, estimateImageLines } from './services/cameraGeometry';
 import { VideoTimingService } from './services/videoTimingService';
@@ -18,12 +20,12 @@ import {
   VideoTrackMetrics,
   UnifiedConfidenceScores,
   ManualAnchorInput,
-  VideoTiming
+  VideoTiming,
+  MatchResult
 } from './types';
 import { computePitcherBiometrics, DEFAULT_PITCHER_BIOMETRICS } from './spatialCalibration';
 import { PitchVideoPlayer } from './components/PitchVideoPlayer';
 import { PitchVisualizer } from './components/PitchVisualizer';
-import { FrameSlidersCard } from './components/FrameSlidersCard';
 import { MetricsPanel } from './components/MetricsPanel';
 import { PitcherSetupCard } from './components/PitcherSetupCard';
 import { DatabaseModal } from './components/DatabaseModal';
@@ -67,17 +69,20 @@ export default function App() {
 
   const [aiDetection, setAiDetection] = useState<FrameDetectionResult | null>(null);
   const [autoDetectResult, setAutoDetectResult] = useState<AutoFrameDetectionOutput | null>(null);
+  const autoGeneration=useRef(0);
   const [isAutoDetectingFrames, setIsAutoDetectingFrames] = useState<boolean>(false);
   const [autoDetectProgress, setAutoDetectProgress] = useState<number>(0);
   const [autoDetectStageText, setAutoDetectStageText] = useState<string>('');
 
-  const [releaseFrame, setReleaseFrame] = useState<number>(0);
-  const [gloveFrame, setGloveFrame] = useState<number>(0);
+  const [events,setEvents]=useState<SelectedEvents>({release:null,glove:null});
+  const [analyzedEvents,setAnalyzedEvents]=useState<SelectedEvents|null>(null);
+  const [currentViewKind,setCurrentViewKind]=useState<PositionKind>('original');
+  const eventView=useMemo(()=>{try{return videoTiming?eventAnalysisView(videoTiming.timestamps,events):null;}catch{return null;}},[videoTiming,events]);
+  const releaseFrame=eventView?.releaseFrame??events.release?.left??0,gloveFrame=eventView?.gloveFrame??events.glove?.left??0;
   const [visibleEndFrame, setVisibleEndFrame] = useState<number>(0);
   const [currentVideoFrame, setCurrentVideoFrame] = useState<number>(0);
   const [targetFrameSeek, setTargetFrameSeek] = useState<number | null>(null);
   const [scienceOpen,setScienceOpen]=useState(false);
-  const [manualFrames,setManualFrames]=useState(false);
   const [cameraGeometry,setCameraGeometry]=useState<CameraGeometry|null>(null);
   const [referencePoints,setReferencePoints]=useState<(ImagePoint|null)[]>([null,null,null,null]);
   const [referenceSelection,setReferenceSelection]=useState<number|null>(null);
@@ -86,8 +91,9 @@ export default function App() {
   const [referenceConfirmed,setReferenceConfirmed]=useState(false);
   const [referenceFocal,setReferenceFocal]=useState<number|undefined>();
   const analysisDistance=cameraGeometry?.method==='planar_reference'?cameraGeometry.referenceLengthM!:biometrics.effectiveTravelDistanceM;
-  const markRelease=(frame:number)=>{setReleaseFrame(frame);setManualFrames(true);setHasAnalyzed(false);setManualAnchor(prev=>prev?{...prev,point1:undefined}:null);};
-  const markGlove=(frame:number)=>{setGloveFrame(frame);setVisibleEndFrame(frame);setManualFrames(true);setHasAnalyzed(false);setManualAnchor(prev=>prev?{...prev,point2:undefined}:null);};
+  const setEvent=(name:'release'|'glove',event:SelectedEvent)=>{setEvents(prev=>({...prev,[name]:event}));setHasAnalyzed(false);if(name==='glove')setVisibleEndFrame(event.right);setManualAnchor(prev=>prev?{...prev,[name==='release'?'point1':'point2']:undefined}:null);};
+  const markRelease=(frame:number)=>{if(videoTiming?.timestamps[frame]!==undefined)setEvent('release',selectEvent(describePosition(videoTiming.timestamps,videoTiming.timestamps[frame],videoTiming.timeBase!=='timestamp'),videoTiming.timestamps));};
+  const markGlove=(frame:number)=>{if(videoTiming?.timestamps[frame]!==undefined)setEvent('glove',selectEvent(describePosition(videoTiming.timestamps,videoTiming.timestamps[frame],videoTiming.timeBase!=='timestamp'),videoTiming.timestamps));};
   const showScience=()=>{setScienceOpen(true);requestAnimationFrame(()=>document.getElementById('science-center')?.scrollIntoView());};
 
   // 手動雙錨點模式 (Manual Anchor Mode - 作為輔助走廊，不直接取代整條球路)
@@ -106,6 +112,10 @@ export default function App() {
   const [videoFileName, setVideoFileName] = useState<string>('');
 
   // 分析狀態管理
+  const analysisInputGeneration=useRef(0);
+  const [completedResult,setCompletedResult]=useState<MatchResult|null>(null);
+  const [useExistingTracking,setUseExistingTracking]=useState(false);
+  const [manualFpsDraft,setManualFpsDraft]=useState('30');
   const [hasAnalyzed, setHasAnalyzed] = useState<boolean>(false);
   const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
   const [analysisProgress, setAnalysisProgress] = useState<number>(0);
@@ -125,6 +135,10 @@ export default function App() {
   const [isCodeModalOpen, setIsCodeModalOpen] = useState<boolean>(false);
 
   const isVideoLoaded = Boolean(userVideoUrl && totalVideoFrames > 0 && videoLoadStatus === 'ready');
+
+  const sourceTimesValid=useMemo(()=>hasUsableSourceTimes(videoTiming),[videoTiming]);
+  const analysisBlockReason=manualAnalysisReason(isVideoLoaded,isAnalyzing,isAutoDetectingFrames,videoTiming,releaseFrame,gloveFrame,sourceTimesValid)||(eventView?null:'請在影片下方設定出手與進手套時間。');
+  useEffect(()=>{analysisInputGeneration.current++;setHasAnalyzed(false);},[selectedPitchType,cameraViewMode,biometrics,strictPitchTypeMode,allowCrossTypeFallback,events,videoTiming,userVideoUrl]);
 
   // Unmount cleanup for Object URL
   useEffect(() => {
@@ -188,8 +202,7 @@ export default function App() {
       warnings: []
     });
 
-    setReleaseFrame(102);
-    setGloveFrame(145);
+    setEvents({release:selectEvent(describePosition(demoTimestamps,demoTimestamps[102],true),demoTimestamps),glove:selectEvent(describePosition(demoTimestamps,demoTimestamps[145],true),demoTimestamps)});
     setVisibleEndFrame(145);
     setCurrentVideoFrame(102);
     setTargetFrameSeek(102);
@@ -213,7 +226,7 @@ export default function App() {
     if (!file) return;
 
     setVideoLoadError(null);
-    setManualFrames(false);setCameraGeometry(null);setReferencePoints([null,null,null,null]);setReferenceConfirmed(false);
+    setEvents({release:null,glove:null});setAnalyzedEvents(null);setCompletedResult(null);setCurrentViewKind('original');setUserVideoUrl(null);setVideoTiming(null);setRightColumnTab('metrics');setCameraGeometry(null);setReferencePoints([null,null,null,null]);setReferenceConfirmed(false);
     setHasAnalyzed(false);
     setAiDetection(null);
     setAutoDetectResult(null);
@@ -234,11 +247,11 @@ export default function App() {
       // 單一梯次更新所有影片狀態，確保 PitchVideoPlayer 第一次掛載即擁有完整 metadata 與有效 Object URL
       setVideoFileName(loadResult.fileName);
       setTotalVideoFrames(loadResult.totalFrames);
-      setVideoFps(loadResult.actualFps);
+      setVideoFps(loadResult.actualFps);setManualFpsDraft(String(loadResult.actualFps));
       setVideoTiming({
         ...loadResult.timing,
         durationSec: loadResult.durationSec,
-        timeBase: loadResult.fpsSource === 'measured_rvfc' ? 'timestamp' : 'fps_derived',
+        timeBase: loadResult.timing.timeBase,
         actualFps: loadResult.actualFps,
         fpsSource: loadResult.fpsSource,
         isVFR: loadResult.isVFR,
@@ -248,8 +261,7 @@ export default function App() {
         height: loadResult.height
       });
       setVideoQuality(loadResult.qualityAssessment);
-      setReleaseFrame(0);
-      setGloveFrame(0);
+      setEvents({release:null,glove:null});
       setVisibleEndFrame(loadResult.initialGloveFrame);
       setCurrentVideoFrame(loadResult.initialReleaseFrame);
       setTargetFrameSeek(loadResult.initialReleaseFrame);
@@ -271,6 +283,7 @@ export default function App() {
       return;
     }
 
+    const generation=++autoGeneration.current;
     setIsAutoDetectingFrames(true);
     setAutoDetectProgress(5);
     setAutoDetectStageText('掃描影片...');
@@ -288,11 +301,13 @@ export default function App() {
         videoHeight: videoEl.videoHeight || videoTiming?.height || 1280,
         timestamps: videoTiming?.timestamps,
         onProgress: (pct, text) => {
+          if(generation!==autoGeneration.current)throw Error('使用者停止自動辨識');
           setAutoDetectProgress(pct);
           setAutoDetectStageText(text);
         }
       });
 
+      if(generation!==autoGeneration.current)return;
       setAutoDetectResult(result);
 
       if (
@@ -327,6 +342,7 @@ export default function App() {
         });
       }
     } catch (err: any) {
+      if(generation!==autoGeneration.current)return;
       setAutoDetectResult({
         status: 'AUTO_DETECTION_FAILED',
         releaseFrame: null,
@@ -354,14 +370,15 @@ export default function App() {
         stepDetails: []
       });
     } finally {
-      setIsAutoDetectingFrames(false);
+      if(generation===autoGeneration.current)setIsAutoDetectingFrames(false);
     }
   };
 
   // 啟動真實電腦視覺棒球追蹤、空間校正與位移反查資料庫分析
   const handleStartAnalysis = async () => {
-    if (!isVideoLoaded || !videoTiming?.timingReliable) return;
-
+    if (analysisBlockReason) {setVideoLoadError(analysisBlockReason);return;}
+    const inputGeneration=analysisInputGeneration.current;
+    setVideoLoadError(null);setHasAnalyzed(false);
     setIsAnalyzing(true);
     videoElementRef.current?.pause();
     try {
@@ -370,7 +387,7 @@ export default function App() {
 
     // 步驟 2: 運動差分候選、時間走廊追蹤與稀疏觀測點擷取
     let sparseResult = null;
-    if (videoElementRef.current) {
+    if (useExistingTracking && videoElementRef.current) {
       setAnalysisProgress(20);
       setAnalysisStepText(`【步驟 2/6】執行 ${videoFps.toFixed(1)} FPS 差分運動偵測與時間走廊追蹤...`);
       try {
@@ -402,7 +419,7 @@ export default function App() {
     }
 
     const validationResult = validateAndReconstructVideoTrack({
-      observations: sparseResult?.observations || [],
+      observations: (sparseResult?.observations || []).filter(p=>p.timestamp>=events.release!.timeSec&&p.timestamp<=events.glove!.timeSec&&!(events.glove!.kind==='interpolated'&&p.frame===gloveFrame)),
       releaseFrame,
       lastReliableBallFrame: effectiveVisibleEnd,
       catchFrame: gloveFrame,
@@ -411,10 +428,13 @@ export default function App() {
       videoHeight: videoElementRef.current?.videoHeight || videoTiming?.height || 1280
     });
 
+    let analysisGeometry=cameraGeometry;
     if (videoElementRef.current && cameraGeometry?.method !== 'planar_reference') {
+      try {
       const canvas=document.createElement('canvas');canvas.width=videoElementRef.current.videoWidth;canvas.height=videoElementRef.current.videoHeight;
       const decoded=await VideoTimingService.seekAndCaptureFrame(videoElementRef.current,releaseFrame,videoFps,canvas,videoTiming?.timestamps[releaseFrame]);
-      if(decoded.imageData)setCameraGeometry(estimateImageLines(decoded.imageData));
+      if(decoded.imageData){analysisGeometry=estimateImageLines(decoded.imageData);setCameraGeometry(analysisGeometry);}
+      } catch {setAnalysisStepText('幾何影像擷取不可用，沿用既有模型估算，不中斷手動分析');}
     }
     setVideoTrack(validationResult.videoTrack);
     setVideoMetrics(validationResult.metrics);
@@ -465,8 +485,12 @@ export default function App() {
       });
     }
 
+    if(inputGeneration!==analysisInputGeneration.current){setVideoLoadError('分析期間事件或設定已變更，請重新分析');return;}
+    const computed=matchPitchData(velocityKmh,flightSeconds,selectedPitchType,cameraViewMode,PITCH_DATABASE,releaseFrame,gloveFrame,biometrics,validationResult.videoTrack,validationResult.metrics,conf,videoFps,eventView!.timestamps,strictPitchTypeMode,allowCrossTypeFallback,isManualUsed,autoDetectResult?.confidence,analysisGeometry||undefined);
+    // Time-source presentation only; confidence formulas and numerical scores stay unchanged.
+    computed.confidence_scores.quality_notes=computed.confidence_scores.quality_notes.map(note=>note.startsWith('飛行時間 ')?`事件時差 ${flightSeconds.toFixed(6)}s；品質評分沿用原始影格跨度，不把90Hz位置當觀測` : note);
+    setCompletedResult(computed);setAnalyzedEvents(events);
     setAnalysisProgress(100);
-    setIsAnalyzing(false);
     setHasAnalyzed(true);
     } catch(error) {
       setVideoLoadError(error instanceof Error?error.message:'分析失敗，請確認影格與影片');
@@ -474,70 +498,16 @@ export default function App() {
   };
 
   // Physical calculations prioritizing timestamps[] over frame / fps
-  const { velocityKmh, flightSeconds, flightFrames } = useMemo(() => {
-    if (releaseFrame < 0 || gloveFrame <= releaseFrame) {
-      return { velocityKmh: 0, flightSeconds: 0, flightFrames: 0 };
-    }
-    return calculateVelocity(
-      releaseFrame,
-      gloveFrame,
-      videoFps,
-      analysisDistance,
-      videoTiming?.timestamps
-    );
-  }, [releaseFrame, gloveFrame, videoFps, analysisDistance, videoTiming?.timestamps]);
+  const {velocityKmh,flightSeconds,flightFrames}=useMemo(()=>eventView?calculateVelocity(eventView.releaseFrame,eventView.gloveFrame,videoFps,analysisDistance,eventView.timestamps):{velocityKmh:0,flightSeconds:0,flightFrames:0},[eventView,videoFps,analysisDistance]);
 
   // Match result with PitchVision Synthetic Physics Reference Dataset
-  const matchedResult = useMemo(() => {
-    if (!hasAnalyzed || velocityKmh <= 0) return null;
-    const isManualUsed = Boolean(manualAnchor?.point1 && manualAnchor?.point2);
-    return matchPitchData(
-      velocityKmh,
-      flightSeconds,
-      selectedPitchType,
-      cameraViewMode,
-      PITCH_DATABASE,
-      releaseFrame,
-      gloveFrame,
-      biometrics,
-      videoTrack,
-      videoMetrics || undefined,
-      confidenceScores || undefined,
-      videoFps,
-      videoTiming?.timestamps,
-      strictPitchTypeMode,
-      allowCrossTypeFallback,
-      isManualUsed,
-      autoDetectResult?.confidence,
-      cameraGeometry || undefined
-    );
-  }, [
-    hasAnalyzed,
-    velocityKmh,
-    flightSeconds,
-    cameraViewMode,
-    selectedPitchType,
-    releaseFrame,
-    gloveFrame,
-    biometrics,
-    videoTrack,
-    videoMetrics,
-    confidenceScores,
-    videoFps,
-    videoTiming?.timestamps,
-    strictPitchTypeMode,
-    allowCrossTypeFallback,
-    manualAnchor,
-    autoDetectResult?.confidence,
-    cameraGeometry
-  ]);
+  const matchedResult = hasAnalyzed ? completedResult : null;
 
   // 回復 AI 建議影格
   const handleResetToAiFrames = () => {
     if (aiDetection && aiDetection.releaseFrame > 0 && aiDetection.gloveFrame > aiDetection.releaseFrame) {
-      setManualFrames(true);
-      setReleaseFrame(aiDetection.releaseFrame);
-      setGloveFrame(aiDetection.gloveFrame);
+      markRelease(aiDetection.releaseFrame);
+      markGlove(aiDetection.gloveFrame);
       setVisibleEndFrame(aiDetection.gloveFrame);
       setTargetFrameSeek(aiDetection.releaseFrame);
     }
@@ -551,7 +521,7 @@ export default function App() {
 
   // 手動錨點設定處理
   const handleSetAnchorPoint = (pointIdx: 1 | 2, xNorm: number, yNorm: number) => {
-    const f = currentVideoFrame || releaseFrame;
+    const f = currentVideoFrame;
     setManualAnchor((prev) => {
       if (pointIdx === 1) {
         return {
@@ -592,7 +562,7 @@ export default function App() {
             <div className="flex items-center gap-2">
               <h1 className="text-base sm:text-lg font-black text-white tracking-tight flex items-center gap-2">
                 <span className="text-transparent bg-clip-text bg-gradient-to-r from-orange-400 via-amber-300 to-cyan-400">
-                  PitchVision V4.1
+                  PitchVision V4.1.1
                 </span>
                 <span className="text-xs sm:text-sm font-semibold text-slate-300 hidden md:inline">
                   投球物理量測與位移反查系統
@@ -726,7 +696,7 @@ export default function App() {
               <details className="rounded border border-slate-700 p-2"><summary>投手／距離進階設定</summary><PitcherSetupCard biometrics={biometrics} onChange={setBiometrics} recomputeBiometrics={computePitcherBiometrics}/></details>
               {videoTiming&&<div id="timing-status" className="text-xs rounded border border-amber-500/40 p-3">
                 FPS {videoFps.toFixed(4)} / {videoTiming.fpsSource} / {videoTiming.isVFR?'VFR':'CFR'} / {videoTiming.timingReliable?'時間表已取得':'時間未確認'}<br/>{videoTiming.timingWarning}
-                {!videoTiming.timingReliable&&<label>指定可信FPS（CFR假設）<input id="manual-fps" type="number" min="1" max="1000" step="0.001" defaultValue={videoFps} onBlur={e=>{const fps=Number(e.target.value);if(fps>0&&fps<=1000){const count=Math.ceil(videoTiming.durationSec*fps);setVideoFps(fps);setTotalVideoFrames(count);setVideoTiming({...videoTiming,actualFps:fps,fpsSource:'user_supplied',timingReliable:true,isVFR:false,totalFrames:count,timestamps:Array.from({length:count},(_,i)=>i/fps),timeBase:'fps_derived',timingWarning:'使用者指定CFR；VFR/解碼精度仍未驗證。'});}}}/></label>}
+                {!sourceTimesValid&&<div><label>指定可信FPS（CFR假設）<input id="manual-fps" type="number" min="1" max="1000" step="0.001" value={manualFpsDraft} onChange={e=>setManualFpsDraft(e.target.value)}/></label><button id="confirm-manual-fps" onClick={()=>{const fps=Number(manualFpsDraft);if(!Number.isFinite(fps)||fps<=0||fps>1000){setVideoLoadError('FPS須為1至1000的有效數值');return;}const count=Math.ceil(videoTiming.durationSec*fps);setVideoFps(fps);setTotalVideoFrames(count);setVideoTiming({...videoTiming,actualFps:fps,fpsSource:'user_supplied',timingReliable:true,isVFR:false,totalFrames:count,timestamps:Array.from({length:count},(_,i)=>i/fps),timeBase:'fps_derived',timingWarning:'使用者確認CFR時間假設；原始影格數與解碼精度未確認。'});setEvents({release:null,glove:null});setManualAnchor(null);setIsSelectingPoint(null);setTargetFrameSeek(0);setHasAnalyzed(false);setVideoLoadError(null);}}>確認 FPS</button></div>}
               </div>}
               {/* 2. 視角切換 */}
               <div>
@@ -852,14 +822,17 @@ export default function App() {
                   busy={isAnalyzing||isAutoDetectingFrames}
                   targetFrameSeek={targetFrameSeek}
                   onCurrentFrameChange={(f) => setCurrentVideoFrame(f)}
-                  onSetReleaseFrame={markRelease}
-                  onSetGloveFrame={markGlove}
+                  sourceTiming={videoTiming}
+                  events={events}
+                  onSetEvent={setEvent}
+                  onPositionChange={point=>setCurrentViewKind(point.kind)}
                   spatialCalibration={matchedResult?.spatial_calibration}
                   onVideoElementReady={(el) => {
                     videoElementRef.current = el;
                   }}
                   isSelectingPoint={referenceSelection !== null ? 1 : isSelectingPoint}
                   onSelectCoordinate={(x, y) => {
+                    if(currentViewKind==='interpolated')return;
                     if(referenceSelection !== null){setReferencePoints(prev=>prev.map((p,i)=>i===referenceSelection?{x,y}:p));setReferenceSelection(null);return;}
                     if (isSelectingPoint) {
                       handleSetAnchorPoint(isSelectingPoint, x, y);
@@ -870,42 +843,20 @@ export default function App() {
                 />
               </div>
 
-              <div id="manual-controls" className="space-y-3">
-                <FrameSlidersCard
-                  releaseFrame={releaseFrame}
-                  gloveFrame={gloveFrame}
-                  visibleEndFrame={visibleEndFrame}
-                  totalVideoFrames={totalVideoFrames}
-                  fps={videoFps}
-                  timestamps={videoTiming?.timestamps}
-                  aiReleaseFrame={
-                    autoDetectResult?.status && autoDetectResult.status !== 'AUTO_DETECTION_FAILED'
-                      ? autoDetectResult.releaseFrame
-                      : null
-                  }
-                  aiGloveFrame={
-                    autoDetectResult?.status && autoDetectResult.status !== 'AUTO_DETECTION_FAILED'
-                      ? autoDetectResult.gloveFrame
-                      : null
-                  }
-                  disabled={!isVideoLoaded || isAnalyzing || isAutoDetectingFrames}
-                  onChangeReleaseFrame={markRelease}
-                  onChangeGloveFrame={markGlove}
-                  onChangeVisibleEndFrame={(newEnd) => setVisibleEndFrame(newEnd)}
-                  onSeekVideoFrame={handleSeekVideoFrame}
-                />
+              <div className="space-y-3">
               {isVideoLoaded&&<details className="border border-slate-700 p-3 rounded"><summary>球體位置與攝影幾何校正（選填）</summary>
                 <p className="text-xs">影格控制共用上方設定。暫停在球清楚可見的影格後標記位置，僅作追蹤搜尋提示，不當作真實觀測。</p>
-                <div className="flex flex-wrap gap-2"><button id="mark-position-1" onClick={()=>setIsSelectingPoint(1)}>標記首個球位置 F{currentVideoFrame}</button><button id="mark-position-2" onClick={()=>setIsSelectingPoint(2)}>標記末個球位置 F{currentVideoFrame}</button><button onClick={handleClearAnchors}>清除球位置</button></div>
+                <div className="flex flex-wrap gap-2"><button id="mark-position-1" disabled={currentViewKind==='interpolated'||isAnalyzing||isAutoDetectingFrames} onClick={()=>setIsSelectingPoint(1)}>標記首個球位置 F{currentVideoFrame}</button><button id="mark-position-2" disabled={currentViewKind==='interpolated'||isAnalyzing||isAutoDetectingFrames} onClick={()=>setIsSelectingPoint(2)}>標記末個球位置 F{currentVideoFrame}</button><button disabled={isAnalyzing||isAutoDetectingFrames} onClick={handleClearAnchors}>清除球位置</button></div>
+                <label className="block text-xs">球最後可見原始索引（追蹤提示，非接球事件）<input id="visible-end-frame" disabled={isAnalyzing||isAutoDetectingFrames} type="number" min={releaseFrame} max={totalVideoFrames-1} value={visibleEndFrame} onChange={e=>setVisibleEndFrame(Math.max(releaseFrame,Math.min(totalVideoFrames-1,Number(e.target.value))))}/></label>
                 <p className="text-xs">{manualAnchor?.point1?`位置1 F${manualAnchor.point1.frame}`:'位置1未設定'} / {manualAnchor?.point2?`位置2 F${manualAnchor.point2.frame}`:'位置2未設定'}</p>
                 <p className="text-xs mt-3">地面已知矩形：依序標記出手端左→右→接球端右→左。只有實際已知尺寸可使用，不要用猜測尺寸當量測。</p>
-                <div className="flex flex-wrap gap-2">{referencePoints.map((p,i)=><button key={i} onClick={()=>setReferenceSelection(i)}>幾何角點{i+1}{p?' ✓':''}</button>)}</div>
+                <div className="flex flex-wrap gap-2">{referencePoints.map((p,i)=><button key={i} disabled={currentViewKind==='interpolated'||isAnalyzing||isAutoDetectingFrames} onClick={()=>setReferenceSelection(i)}>幾何角點{i+1}{p?' ✓':''}</button>)}</div>
                 <label>已知寬(m)<input type="number" value={referenceWidth} onChange={e=>setReferenceWidth(Number(e.target.value))}/></label>
                 <label>出手端至接球端已知長(m)<input type="number" value={referenceLength} onChange={e=>setReferenceLength(Number(e.target.value))}/></label>
                 <label>已校準焦距(px，選填)<input type="number" value={referenceFocal??''} onChange={e=>setReferenceFocal(Number(e.target.value)||undefined)}/></label>
                 <label><input type="checkbox" checked={referenceConfirmed} onChange={e=>setReferenceConfirmed(e.target.checked)}/>已確認矩形與實際尺度</label>
-                <button id="apply-camera-calibration" disabled={!referenceConfirmed||referencePoints.some(p=>!p)} onClick={()=>{try{const v=videoElementRef.current!;setCameraGeometry(calibrateGroundReference(v.videoWidth,v.videoHeight,{points:referencePoints as ImagePoint[],widthM:referenceWidth,lengthM:referenceLength,focalPx:referenceFocal}));setHasAnalyzed(false);}catch(e){setVideoLoadError(e instanceof Error?e.message:'標定失敗');}}}>套用幾何標定</button>
-                <button onClick={()=>{setCameraGeometry(null);setReferenceConfirmed(false);setReferencePoints([null,null,null,null]);}}>清除幾何標定</button>
+                <button id="apply-camera-calibration" disabled={isAnalyzing||isAutoDetectingFrames||!referenceConfirmed||referencePoints.some(p=>!p)} onClick={()=>{try{const v=videoElementRef.current!;setCameraGeometry(calibrateGroundReference(v.videoWidth,v.videoHeight,{points:referencePoints as ImagePoint[],widthM:referenceWidth,lengthM:referenceLength,focalPx:referenceFocal}));setHasAnalyzed(false);}catch(e){setVideoLoadError(e instanceof Error?e.message:'標定失敗');}}}>套用幾何標定</button>
+                <button disabled={isAnalyzing||isAutoDetectingFrames} onClick={()=>{setCameraGeometry(null);setHasAnalyzed(false);setReferenceConfirmed(false);setReferencePoints([null,null,null,null]);}}>清除幾何標定</button>
                 {cameraGeometry&&<p id="camera-geometry-status" className="text-xs">{cameraGeometry.method} / {cameraGeometry.method==='planar_reference'?`yaw ${cameraGeometry.azimuthDeg.toFixed(1)}° / pitch ${cameraGeometry.elevationDeg.toFixed(1)}°`:'yaw / pitch 未估定'} / roll {cameraGeometry.rollDeg.toFixed(1)}°<br/>{cameraGeometry.limitations.join('；')}</p>}
               </details>}
               </div>
@@ -953,6 +904,7 @@ export default function App() {
                   </div>
                 </div>
 
+                {isAutoDetectingFrames&&<button id="stop-auto-detection" onClick={()=>{autoGeneration.current++;setIsAutoDetectingFrames(false);videoElementRef.current?.pause();}}>停止自動辨識，使用手動模式</button>}
                 {/* AI 自動搜尋進度面板 */}
                 {isAutoDetectingFrames && (
                   <div className="p-3 rounded-xl bg-slate-950 border border-cyan-500/40 space-y-2 text-xs">
@@ -1026,12 +978,13 @@ export default function App() {
 
               </div>
 
+              <label className="text-xs flex gap-2"><input id="use-existing-tracking" type="checkbox" checked={useExistingTracking} onChange={e=>setUseExistingTracking(e.target.checked)} disabled={isAnalyzing}/>另執行原有影像追蹤（選填；手動模型分析不需要）</label>
               {/* 6. 啟動位移反查與物理閉環驗證分析按鈕 */}
               <div className="pt-1 space-y-2">
                 <button
                   id="btn-start-analysis"
                   onClick={handleStartAnalysis}
-                  disabled={isAnalyzing || isAutoDetectingFrames || !isVideoLoaded || !videoTiming?.timingReliable || !manualFrames || releaseFrame < 0 || gloveFrame <= releaseFrame}
+                  disabled={Boolean(analysisBlockReason)}
                   className="w-full py-3 rounded-xl bg-gradient-to-r from-blue-600 via-indigo-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500 text-white font-bold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg shadow-blue-600/25 transition-all active:scale-[0.99] disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {isAnalyzing ? (
@@ -1051,27 +1004,12 @@ export default function App() {
                   ) : (
                     <>
                       <Sparkles className="w-4 h-4" />
-                      <span>🚀 啟動實測球路追蹤 ＋ 同球種位移反查 RPM / Spin Axis 分析</span>
+                      <span>🚀 啟用實測球路追蹤分析（手動時間／原模型）</span>
                     </>
                   )}
                 </button>
 
-                {/* 狀態提示指引 */}
-                {!isVideoLoaded ? (
-                  <p className="text-[11px] text-slate-500 text-center">
-                    💡 提示：請先上傳投球影片（或載入示範短片），即可使用「AI 自動搜尋出手 / 進手套」或手動設定影格。
-                  </p>
-                ) : gloveFrame <= releaseFrame ? (
-                  <p className="text-[11px] text-amber-400 text-center bg-amber-950/20 border border-amber-500/20 rounded-lg py-1 px-2 font-medium">
-                    ⚠️ 提醒：目前進手套影格 (F{gloveFrame}) 需大於出手影格 (F{releaseFrame})，以計算飛行時間推算初速。
-                  </p>
-                ) : !hasAnalyzed && !isAnalyzing ? (
-                  <p className="text-[11px] text-emerald-400/90 text-center bg-emerald-950/20 border border-emerald-500/20 rounded-lg py-1 px-2 font-medium">
-                    ✨ 影格設定完畢 (出手 F{releaseFrame} ｜ 進手套 F{gloveFrame})，點擊啟動球路追蹤與位移反查分析。
-                  </p>
-                ) : null}
-
-                {/* 逐格分析即時進度條與步階說明 */}
+                <p id="analysis-readiness" role="status" className="text-xs text-amber-200">{analysisBlockReason || (hasAnalyzed?'分析已完成，可修改事件後重新分析。':'手動時間設定可分析；不需執行自動辨識。')}</p>
                 {isAnalyzing && (
                   <div className="mt-2.5 p-3 bg-slate-950 border border-blue-500/30 rounded-xl space-y-2 text-xs">
                     <div className="flex items-center justify-between text-slate-300">
@@ -1157,6 +1095,7 @@ export default function App() {
                 </span>
               </div>
 
+              {hasAnalyzed&&analyzedEvents&&<p id="event-time-provenance" data-events={JSON.stringify(analyzedEvents)} className="text-xs text-amber-200 mb-3">出手 {analyzedEvents.release?.timeSec.toFixed(6)}s（{analyzedEvents.release?.kind==='interpolated'?'推算':analyzedEvents.release?.kind==='cfr_assumed'?'CFR假設':'原始'}）→進手套 {analyzedEvents.glove?.timeSec.toFixed(6)}s（{analyzedEvents.glove?.kind==='interpolated'?'推算':analyzedEvents.glove?.kind==='cfr_assumed'?'CFR假設':'原始'}）。事件精度仍受原始間距 {Math.max(analyzedEvents.release?.sourceSpanSec||0,analyzedEvents.glove?.sourceSpanSec||0).toFixed(4)}s 與遮蔽限制；補幀不增加真觀測或旋轉量測精度。</p>}
               {rightColumnTab === 'metrics' ? (
                 <MetricsPanel compact
                   result={matchedResult || undefined}

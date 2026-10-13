@@ -134,6 +134,16 @@ export class VideoLoadService {
       throw new Error(msg);
     }
 
+    // Some browser-recorded WebM files expose duration only after seeking to their buffered end.
+    if(!Number.isFinite(probeVideo.duration)){
+      await new Promise<void>((resolve,reject)=>{
+        const timer=setTimeout(()=>finish(new Error('影片未提供可確認的時長，請匯出包含完整時間資訊的影片')),4000);
+        const finish=(error?:Error)=>{clearTimeout(timer);probeVideo.removeEventListener('durationchange',changed);probeVideo.removeEventListener('seeked',changed);error?reject(error):resolve();};
+        const changed=()=>{if(Number.isFinite(probeVideo.duration)&&probeVideo.duration>0)finish();};
+        probeVideo.addEventListener('durationchange',changed);probeVideo.addEventListener('seeked',changed);probeVideo.currentTime=1e9;
+      });
+      probeVideo.currentTime=0;
+    }
     if (!Number.isFinite(probeVideo.duration) || probeVideo.duration <= 0 || !probeVideo.videoWidth || !probeVideo.videoHeight) {
       throw new Error('影片缺少有效長度或影像軌，請改用可播放的 MP4 / MOV / WebM 檔案。');
     }

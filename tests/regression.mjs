@@ -8,3 +8,5 @@ for(const path of ['src/pitchDatabase.json','amateur_pitch_database_v3.json']) {
  if(hash(path)!==hash('baseline/v3/'+path))throw Error('Original database changed: '+path);
 }
 execFileSync(process.execPath,['tests/v41-science.mjs'],{stdio:'inherit'});
+
+execFileSync(process.execPath,['tests/v411.mjs'],{stdio:'inherit'});

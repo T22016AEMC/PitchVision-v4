@@ -1,239 +1,64 @@
-import React, { useRef, useState, useEffect } from 'react';
-import { Play, Pause, RotateCcw, Video, SkipBack, SkipForward, Pin, Target, CheckCircle2 } from 'lucide-react';
-import { CameraViewMode } from './PitchVisualizer';
-import { SpatialCalibrationInfo } from '../types';
+import React,{useRef,useState,useEffect,useMemo} from 'react';
+import {Play,Pause,Pin,Target,Video} from 'lucide-react';
+import {CameraViewMode,VideoTiming,SpatialCalibrationInfo} from '../types';
+import {TimePosition,SelectedEvent,SelectedEvents,createAnalysisTimeline,selectEvent,sourceIndexAt} from '../services/analysisTimeline';
+import {LocalFrameInterpolation,PreviewFrame} from '../services/localFrameInterpolation';
 
 interface PitchVideoPlayerProps {
-  videoUrl: string | null;
-  releaseFrame: number;
-  gloveFrame: number;
-  totalFrames: number;
-  fps?: number;
-  timestamps?: number[];
-  isFpsEstimated?: boolean;
-  viewMode: CameraViewMode;
-  velocityKmh?: number;
-  pitchName?: string;
-  hasAnalyzed?: boolean;
-  busy?: boolean;
-  onCurrentFrameChange?: (frame: number) => void;
-  targetFrameSeek?: number | null;
-  onSetReleaseFrame?: (frame: number) => void;
-  onSetGloveFrame?: (frame: number) => void;
-  spatialCalibration?: SpatialCalibrationInfo;
-  onVideoElementReady?: (el: HTMLVideoElement | null) => void;
-  isSelectingPoint?: 1 | 2 | null;
-  onSelectCoordinate?: (xNorm: number, yNorm: number) => void;
-  manualPoint1?: { frame: number; x_norm: number; y_norm: number } | null;
-  manualPoint2?: { frame: number; x_norm: number; y_norm: number } | null;
+ videoUrl:string|null;releaseFrame:number;gloveFrame:number;totalFrames:number;fps?:number;timestamps?:number[];sourceTiming?:VideoTiming|null;events:SelectedEvents;
+ isFpsEstimated?:boolean;viewMode:CameraViewMode;velocityKmh?:number;pitchName?:string;hasAnalyzed?:boolean;busy?:boolean;
+ onCurrentFrameChange?:(frame:number)=>void;onPositionChange?:(point:TimePosition)=>void;targetFrameSeek?:number|null;onSetEvent:(name:'release'|'glove',event:SelectedEvent)=>void;
+ spatialCalibration?:SpatialCalibrationInfo;onVideoElementReady?:(el:HTMLVideoElement|null)=>void;isSelectingPoint?:1|2|null;onSelectCoordinate?:(x:number,y:number)=>void;
+ manualPoint1?:{frame:number;x_norm:number;y_norm:number}|null;manualPoint2?:{frame:number;x_norm:number;y_norm:number}|null;
 }
+export function PitchVideoPlayer({videoUrl,releaseFrame,gloveFrame,totalFrames,fps=30,timestamps=[],sourceTiming,events,viewMode,busy=false,onCurrentFrameChange,onPositionChange,targetFrameSeek,onSetEvent,onVideoElementReady,isSelectingPoint=null,onSelectCoordinate,manualPoint1,manualPoint2}:PitchVideoPlayerProps){
+ const videoRef=useRef<HTMLVideoElement|null>(null),previewCanvas=useRef<HTMLCanvasElement|null>(null),session=useRef<LocalFrameInterpolation|null>(null),request=useRef(0);
+ const [isPlaying,setIsPlaying]=useState(false),[isMetadataReady,setIsMetadataReady]=useState(false),[fine,setFine]=useState(false),[currentTime,setCurrentTime]=useState(0);
+ const [preview,setPreview]=useState<PreviewFrame|null>(null),[previewState,setPreviewState]=useState<'idle'|'processing'|'ready'|'failed'>('idle'),[previewError,setPreviewError]=useState('');
+ const [decodedTime,setDecodedTime]=useState<number|null>(null);
+ const [sourceSeeking,setSourceSeeking]=useState(false);
+ const wasBusy=useRef(false),lastPresented=useRef<number|null>(null),suppressPauseSync=useRef(false),pauseSyncPending=useRef(false);
+ const assumed=sourceTiming?.timeBase!=='timestamp';
+ const originalPoints=useMemo(()=>createAnalysisTimeline(timestamps,fps,false,assumed),[timestamps,fps,assumed]);
+ const points=useMemo(()=>{try{return createAnalysisTimeline(timestamps,fps,fine,assumed);}catch{return originalPoints;}},[timestamps,fps,fine,assumed,originalPoints]);
+ const index=points.nearest(currentTime),point=points.get(index)??{timeSec:0,kind:'original' as const,left:0,right:0,alpha:0};
+ const currentFrame=point.left;
+ const showPreview=!isPlaying&&point.kind==='interpolated'&&previewState==='ready'&&Boolean(preview);
+ const canMark=Boolean(videoUrl&&isMetadataReady&&!busy&&!sourceSeeking&&(point.kind!=='interpolated'||previewState==='ready'));
+ const markerPosition=(x:number,y:number)=>{const v=videoRef.current,rect=v?.parentElement?.getBoundingClientRect();if(!v||!rect||!v.videoWidth)return{left:`${x*100}%`,top:`${y*100}%`};const scale=Math.min(rect.width/v.videoWidth,rect.height/v.videoHeight),w=v.videoWidth*scale,h=v.videoHeight*scale;return{left:`${((rect.width-w)/2+x*w)/rect.width*100}%`,top:`${((rect.height-h)/2+y*h)/rect.height*100}%`};};
+ const seek=(p:TimePosition)=>{const v=videoRef.current;if(!v||busy)return;pauseSyncPending.current=false;suppressPauseSync.current=!v.paused;v.pause();setIsPlaying(false);setCurrentTime(p.timeSec);onCurrentFrameChange?.(p.left);onPositionChange?.(p);setDecodedTime(null);v.currentTime=Math.max(0,Math.min((v.duration||p.timeSec+1)-1e-6,p.timeSec+0.0005));};
+ const handleVideoLoadedMetadata=()=>{const v=videoRef.current;if(!v)return;setIsMetadataReady(true);onVideoElementReady?.(v);};
+ const handleSeeked=()=>{setSourceSeeking(false);const v=videoRef.current;if(v&&!('requestVideoFrameCallback' in v))setDecodedTime(null);};
+ const handlePause=()=>{const v=videoRef.current;setIsPlaying(false);if(suppressPauseSync.current){suppressPauseSync.current=false;return;}if(v&&(isPlaying||pauseSyncPending.current)&&timestamps.length){pauseSyncPending.current=true;const f=lastPresented.current!==null?originalPoints.nearest(lastPresented.current):sourceIndexAt(timestamps,v.currentTime),p=originalPoints.get(f);setCurrentTime(p.timeSec);onCurrentFrameChange?.(f);onPositionChange?.(p);}};
+ const handleTimeUpdate=()=>{const v=videoRef.current;if(v&&!v.paused&&(!('requestVideoFrameCallback' in v)||lastPresented.current===null)){const f=sourceIndexAt(timestamps,v.currentTime);const p=originalPoints.get(f);if(p){setCurrentTime(p.timeSec);onCurrentFrameChange?.(f);onPositionChange?.(p);}}};
+ useEffect(()=>{if(busy)pauseSyncPending.current=false;if(wasBusy.current&&!busy&&isMetadataReady)seek(point);wasBusy.current=busy;},[busy]);
+ useEffect(()=>{const v=videoRef.current;if(!v||!videoUrl)return;setFine(false);setPreview(null);setPreviewState('idle');setCurrentTime(timestamps[0]??0);setIsPlaying(false);setIsMetadataReady(false);setDecodedTime(null);lastPresented.current=null;setSourceSeeking(false);v.load();return()=>{v.pause();onVideoElementReady?.(null);};},[videoUrl]);
+ useEffect(()=>{const v=videoRef.current;if(!v||!videoUrl||!('requestVideoFrameCallback' in v))return;let cancelled=false,handle:number;
+  const callback=(_n:number,m:VideoFrameCallbackMetadata)=>{if(cancelled)return;setDecodedTime(m.mediaTime);lastPresented.current=m.mediaTime;if((!v.paused||pauseSyncPending.current)&&timestamps.length){const f=originalPoints.nearest(m.mediaTime),p=originalPoints.get(f);setCurrentTime(p.timeSec);onCurrentFrameChange?.(f);onPositionChange?.(p);}handle=v.requestVideoFrameCallback(callback);};handle=v.requestVideoFrameCallback(callback);return()=>{cancelled=true;v.cancelVideoFrameCallback(handle);};
+ },[videoUrl,timestamps,originalPoints]);
+ useEffect(()=>{if(!isMetadataReady||targetFrameSeek===null||targetFrameSeek===undefined)return;const f=Math.max(0,Math.min(timestamps.length-1,targetFrameSeek)),t=timestamps[f];if(t!==undefined)seek(originalPoints.get(f));},[videoUrl,targetFrameSeek,isMetadataReady,timestamps]);
+ useEffect(()=>{request.current++;session.current?.dispose();session.current=null;return()=>{request.current++;session.current?.dispose();session.current=null;};},[videoUrl,timestamps]);
+ useEffect(()=>{
+  const id=++request.current;setPreview(null);setPreviewState('idle');setPreviewError('');
+  if(!videoUrl||!isMetadataReady||isPlaying||point.kind!=='interpolated')return;
+  setPreviewState('processing');
+  const timer=setTimeout(async()=>{try{
+   if(!session.current)session.current=new LocalFrameInterpolation(videoUrl,timestamps);
+   const result=await session.current.preview(point);if(id!==request.current)return;
+   if(result.quality.identicalSources)throw Error('相鄰來源畫面相同，無法確認新增的中間影像；請退回原始模式');
+   const canvas=previewCanvas.current;if(!canvas)throw Error('插值畫面未就緒');canvas.width=result.width;canvas.height=result.height;
+   const context=canvas.getContext('2d');if(!context)throw Error('無法繪製中間影像，請退回原始模式');context.putImageData(new ImageData(result.data,result.width,result.height),0,0);setPreview(result);setPreviewState('ready');
+  }catch(error){if(id===request.current){setPreviewState('failed');setPreviewError(error instanceof Error?error.message:'補幀暫時不可用，請使用原始模式');}}},100);
+  return()=>{clearTimeout(timer);};
+ },[videoUrl,isMetadataReady,isPlaying,point.timeSec,point.kind,timestamps]);
+ const togglePlay=()=>{const v=videoRef.current;if(!v||busy)return;if(!v.paused){pauseSyncPending.current=true;v.pause();setIsPlaying(false);}else{pauseSyncPending.current=false;setPreview(null);v.play().then(()=>setIsPlaying(true)).catch(()=>setIsPlaying(false));}};
+ const stepFrame=(delta:number)=>{const next=points.get(Math.max(0,Math.min(points.length-1,index+delta)));if(next)seek(next);};
+ const mark=(name:'release'|'glove')=>{if(canMark)onSetEvent(name,selectEvent(point,timestamps,point.kind==='interpolated'?preview?.quality.level:undefined));};
+ const switchMode=(next:boolean)=>{setFine(next);const timeline=createAnalysisTimeline(timestamps,fps,next,assumed),p=timeline.get(timeline.nearest(point.timeSec));if(p)seek(p);};
+ const jump=(event:SelectedEvent|null)=>{if(!event)return;const next=event.kind==='interpolated'&&fps<90;setFine(next);const p=createAnalysisTimeline(timestamps,fps,next,assumed);seek(p.get(p.nearest(event.timeSec)));};
+ useEffect(()=>{const key=(e:KeyboardEvent)=>{if(busy||['INPUT','SELECT','TEXTAREA','BUTTON'].includes((e.target as HTMLElement)?.tagName))return;if(e.key==='ArrowLeft'){e.preventDefault();stepFrame(e.shiftKey?-5:-1);}else if(e.key==='ArrowRight'){e.preventDefault();stepFrame(e.shiftKey?5:1);}else if(e.code==='Space'){e.preventDefault();togglePlay();}else if(e.key==='[')mark('release');else if(e.key===']')mark('glove');};window.addEventListener('keydown',key);return()=>window.removeEventListener('keydown',key);},[index,points,busy,canMark,isPlaying]);
+ return <div className="space-y-0">
 
-export const PitchVideoPlayer: React.FC<PitchVideoPlayerProps> = ({
-  videoUrl,
-  releaseFrame,
-  gloveFrame,
-  totalFrames,
-  fps = 30,
-  timestamps,
-  isFpsEstimated = false,
-  viewMode,
-  velocityKmh = 0,
-  hasAnalyzed = false,
-  busy = false,
-  onCurrentFrameChange,
-  targetFrameSeek,
-  onSetReleaseFrame,
-  onSetGloveFrame,
-  onVideoElementReady,
-  isSelectingPoint = null,
-  onSelectCoordinate,
-  manualPoint1,
-  manualPoint2
-}) => {
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const [isPlaying, setIsPlaying] = useState<boolean>(false);
-  const [currentFrame, setCurrentFrame] = useState<number>(releaseFrame || 0);
-  const [isMetadataReady, setIsMetadataReady] = useState<boolean>(false);
-
-  const markerPosition=(x:number,y:number)=>{const v=videoRef.current,rect=v?.parentElement?.getBoundingClientRect();if(!v||!rect||!v.videoWidth)return{left:`${x*100}%`,top:`${y*100}%`};const scale=Math.min(rect.width/v.videoWidth,rect.height/v.videoHeight),w=v.videoWidth*scale,h=v.videoHeight*scale;return{left:`${((rect.width-w)/2+x*w)/rect.width*100}%`,top:`${((rect.height-h)/2+y*h)/rect.height*100}%`};};
-  // Helper: frame -> timestamp (優先使用 timestamps[]，否則使用 frame / fps)
-  const frameToTimeSec = (frameIdx: number): number => {
-    const safeFps = fps > 0 ? fps : 30;
-    if (timestamps && timestamps.length > frameIdx && timestamps[frameIdx] !== undefined) {
-      return timestamps[frameIdx] + Math.min(0.0005, ((timestamps[frameIdx + 1] ?? timestamps[frameIdx] + 1/safeFps) - timestamps[frameIdx])/8);
-    }
-    return Math.max(0, frameIdx / safeFps);
-  };
-
-  // Helper: timestamp -> frame (優先二分搜尋或線性比對 timestamps[])
-  const timeSecToFrame = (timeSec: number): number => {
-    const safeFps = fps > 0 ? fps : 30;
-    if (timestamps && timestamps.length > 0) {
-      let lo=0,hi=timestamps.length-1;
-      while(lo<hi){const mid=Math.ceil((lo+hi)/2);if(timestamps[mid]<=timeSec+1e-6)lo=mid;else hi=mid-1;}
-      return lo;
-    }
-    return Math.round(timeSec * safeFps);
-  };
-
-  // 當 videoUrl 改變時，強制執行 load() 並等待 loadedmetadata 完成後再通知 onVideoElementReady
-  useEffect(() => {
-    const videoEl = videoRef.current;
-    if (!videoEl || !videoUrl) {
-      setIsMetadataReady(false);
-      onVideoElementReady?.(null);
-      return;
-    }
-
-    setIsPlaying(false);
-    setIsMetadataReady(false);
-
-    const handleLoadedMeta = () => {
-      setIsMetadataReady(true);
-      const initialFrame = releaseFrame > 0 ? releaseFrame : 0;
-      setCurrentFrame(initialFrame);
-      const safeDuration = videoEl.duration || (totalFrames > 0 ? totalFrames / Math.max(1, fps) : 10);
-      const initialTime = Math.min(safeDuration, Math.max(0, frameToTimeSec(initialFrame)));
-      try {
-        videoEl.currentTime = initialTime;
-      } catch {
-        // Ignore seek error before readyState
-      }
-      onVideoElementReady?.(videoEl);
-    };
-
-    videoEl.addEventListener('loadedmetadata', handleLoadedMeta);
-    videoEl.preload = 'metadata';
-    videoEl.load();
-
-    // 若瀏覽器已經快取 metadata (readyState >= 1)
-    if (videoEl.readyState >= 1) {
-      handleLoadedMeta();
-    }
-
-    return () => {
-      videoEl.removeEventListener('loadedmetadata', handleLoadedMeta);
-    };
-  }, [videoUrl]);
-
-  // Seek video when targetFrameSeek changes
-  useEffect(() => {
-    if (targetFrameSeek !== undefined && targetFrameSeek !== null && videoRef.current) {
-      setCurrentFrame(targetFrameSeek);
-      const safeDuration = videoRef.current.duration || (totalFrames > 0 ? totalFrames / Math.max(1, fps) : 10);
-      const targetTime = Math.min(safeDuration, Math.max(0, frameToTimeSec(targetFrameSeek)));
-      if (videoRef.current.readyState >= 1) {
-        videoRef.current.currentTime = targetTime;
-      }
-    }
-  }, [targetFrameSeek, fps, totalFrames, timestamps, isMetadataReady]);
-
-  // Video timeupdate sync with currentFrame
-  const handleTimeUpdate = () => {
-    if (videoRef.current) {
-      const frame = timeSecToFrame(videoRef.current.currentTime);
-      setCurrentFrame(frame);
-      if (onCurrentFrameChange) {
-        onCurrentFrameChange(frame);
-      }
-    }
-  };
-
-  const handleVideoLoadedMetadata = () => {
-    if (videoRef.current) {
-      setIsMetadataReady(true);
-      const initialFrame = releaseFrame > 0 ? releaseFrame : 0;
-      setCurrentFrame(initialFrame);
-      const initialTime = frameToTimeSec(initialFrame);
-      videoRef.current.currentTime = initialTime;
-      onVideoElementReady?.(videoRef.current);
-    }
-  };
-
-  const togglePlay = () => {
-    if (!videoRef.current || busy) return;
-    if (isPlaying) {
-      videoRef.current.pause();
-      setIsPlaying(false);
-    } else {
-      if (currentFrame >= totalFrames - 1) {
-        videoRef.current.currentTime = 0;
-      }
-      videoRef.current.play().catch(() => setIsPlaying(false));
-      setIsPlaying(true);
-    }
-  };
-
-  // Step exact frames forward or backward
-  const stepFrame = (delta: number) => {
-    if (!videoRef.current || busy) return;
-    if (isPlaying) {
-      videoRef.current.pause();
-      setIsPlaying(false);
-    }
-    const maxF = totalFrames > 0 ? totalFrames - 1 : 0;
-    const nextFrame = Math.max(0, Math.min(currentFrame + delta, maxF));
-    setCurrentFrame(nextFrame);
-    videoRef.current.currentTime = frameToTimeSec(nextFrame);
-    if (onCurrentFrameChange) {
-      onCurrentFrameChange(nextFrame);
-    }
-  };
-
-  const seekToFrame = (targetFrame: number) => {
-    if (!videoRef.current || busy) return;
-    const maxF = totalFrames > 0 ? totalFrames - 1 : 0;
-    const safeTarget = Math.max(0, Math.min(targetFrame, maxF));
-    setCurrentFrame(safeTarget);
-    videoRef.current.currentTime = frameToTimeSec(safeTarget);
-    if (onCurrentFrameChange) {
-      onCurrentFrameChange(safeTarget);
-    }
-  };
-
-  const playPitchInterval = () => {
-    if (!videoRef.current) return;
-    const startFrame = Math.max(0, releaseFrame - 10);
-    videoRef.current.currentTime = frameToTimeSec(startFrame);
-    setCurrentFrame(startFrame);
-    videoRef.current.play().catch(() => setIsPlaying(false));
-    setIsPlaying(true);
-  };
-
-  // Keyboard controls for fine frame inspection
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if(busy)return;
-      // Don't trigger if user is typing in an input
-      if (['INPUT', 'SELECT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) {
-        return;
-      }
-      if (e.key === 'ArrowLeft') {
-        e.preventDefault();
-        stepFrame(e.shiftKey ? -5 : -1);
-      } else if (e.key === 'ArrowRight') {
-        e.preventDefault();
-        stepFrame(e.shiftKey ? 5 : 1);
-      } else if (e.key === ' ' || e.code === 'Space') {
-        e.preventDefault();
-        togglePlay();
-      } else if (e.key === '[' && onSetReleaseFrame) {
-        e.preventDefault();
-        onSetReleaseFrame(currentFrame);
-      } else if (e.key === ']' && onSetGloveFrame) {
-        e.preventDefault();
-        onSetGloveFrame(currentFrame);
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [currentFrame, isPlaying, totalFrames, onSetReleaseFrame, onSetGloveFrame,busy]);
-
-  const isIntervalValid = gloveFrame > releaseFrame;
-
-  return (
-    <div className="space-y-3">
-      {/* 乾淨無遮擋、高解析特大尺寸影片播放視窗 */}
       <div 
         className={`video-stage relative w-full rounded-2xl overflow-hidden bg-black border-2 border-slate-700/80 shadow-2xl flex items-center justify-center group transition-all duration-300 min-h-[500px] h-[560px] lg:h-[620px]`}
       >
@@ -265,11 +90,14 @@ export const PitchVideoPlayer: React.FC<PitchVideoPlayerProps> = ({
               muted
               onTimeUpdate={handleTimeUpdate}
               onLoadedMetadata={handleVideoLoadedMetadata}
+              onSeeked={handleSeeked}
+              onSeeking={()=>setSourceSeeking(true)}
               onEnded={() => setIsPlaying(false)}
-              onPause={()=>setIsPlaying(false)}
-              onPlay={()=>setIsPlaying(true)}
+              onPause={handlePause}
+              onPlay={()=>{suppressPauseSync.current=false;setIsPlaying(true);}}
             />
 
+            <canvas id="interpolated-preview" ref={previewCanvas} aria-label="局部運動插值畫面" className="absolute inset-0 w-full h-full object-contain pointer-events-none" style={{display:showPreview?'block':'none'}} data-preview-state={previewState} data-quality={preview?.quality.level??''} data-source-indices={JSON.stringify(preview?.sourceIndices??[])} data-source-media-times={JSON.stringify(preview?.sourceMediaTimes??[])} data-changed-a={preview?.changedA??0} data-changed-b={preview?.changedB??0}/>
             {/* Manual Anchor Point 1 Marker */}
             {manualPoint1 && (
               <div
@@ -320,183 +148,29 @@ export const PitchVideoPlayer: React.FC<PitchVideoPlayerProps> = ({
           </div>
         )}
 
-        {/* Top Overlay Bar */}
-        {videoUrl && (
-          <div className="absolute top-3.5 left-3.5 right-3.5 z-20 flex items-center justify-between pointer-events-auto">
-            {/* Left Status Chips */}
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="px-2.5 py-1 rounded-lg bg-slate-950/85 backdrop-blur-md border border-slate-700 text-slate-200 text-xs font-mono font-medium shadow">
-                {viewMode === 'catcher' ? '📷 捕手平視視角' : '📷 投手後方平視視角'}
-              </span>
-
-              <span className="px-2.5 py-1 rounded-lg bg-slate-950/85 backdrop-blur-md border border-emerald-500/40 text-emerald-300 text-xs font-medium shadow flex items-center gap-1">
-                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                <span>純淨影格檢視 (已移除覆蓋軌跡)</span>
-              </span>
-
-              {hasAnalyzed && velocityKmh > 0 && isIntervalValid && (
-                <span className="px-2.5 py-1 rounded-lg bg-slate-950/85 backdrop-blur-md border border-cyan-500/50 text-cyan-300 text-xs font-mono font-bold shadow">
-                  平均球速: {velocityKmh} km/h
-                </span>
-              )}
-            </div>
-
-            {/* Right: Expand/Contract Button & Real-time Frame Counter */}
-            <div className="flex items-center gap-2">
-              {totalFrames > 0 && (
-                <div className="px-3 py-1 rounded-lg bg-slate-950/90 backdrop-blur-md border border-slate-700 text-xs font-mono shadow-md">
-                  <span className="text-slate-400">影格: </span>
-                  <span className="text-cyan-400 font-bold text-sm">F{currentFrame}</span>
-                  <span className="text-slate-500"> / F{totalFrames}</span>
-                  <span className="text-slate-500 ml-1.5">({frameToTimeSec(currentFrame).toFixed(2)}s)</span>
-                  {isFpsEstimated && (
-                    <span className="text-amber-400 ml-1.5 text-[10px]">[FPS ESTIMATED]</span>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* Bottom Left Frame Markers indicator */}
-        {videoUrl && (
-          <div className="absolute bottom-3.5 left-3.5 z-20 pointer-events-none flex items-center gap-2">
-            <div className="px-3 py-1.5 rounded-xl bg-slate-950/90 backdrop-blur-md border border-slate-800 text-xs font-mono shadow-lg flex items-center gap-2.5">
-              <span className="text-red-400 font-bold flex items-center gap-1">
-                <Pin className="w-3 h-3 fill-current" /> 出手: F{releaseFrame}
-              </span>
-              <span className="text-slate-600">|</span>
-              <span className="text-amber-400 font-bold flex items-center gap-1">
-                <Target className="w-3 h-3 text-amber-400" /> 進手套: F{gloveFrame}
-              </span>
-            </div>
-          </div>
-        )}
 
       </div>
-
-      {/* Frame Scrubber and Micro-Navigation Toolbar */}
-      {videoUrl && totalFrames > 0 && (
-        <div className="bg-[#0b1329]/90 border border-slate-800 rounded-xl p-3 space-y-2.5 text-xs">
-          <button type="button" disabled={busy} onClick={togglePlay} className="px-4 py-2 rounded bg-blue-600 flex gap-2 items-center">{isPlaying?<Pause className="w-4 h-4"/>:<Play className="w-4 h-4"/>}{isPlaying?'暫停':'播放'}</button>
-          {/* Timeline Range Slider */}
-          <div className="space-y-1">
-            <div className="flex items-center justify-between text-xs text-slate-400 font-mono">
-              <span className="text-slate-400 font-medium">影片PTS時間軸（定位仍受瀏覽器解碼限制）</span>
-              <span className="text-cyan-400 font-bold">第 {currentFrame} 幀 / 共 {totalFrames} 幀</span>
-            </div>
-            <input
-              type="range"
-              aria-label="影片時間軸"
-              disabled={busy}
-              min={0}
-              max={Math.max(0,totalFrames-1)}
-              value={currentFrame}
-              onChange={(e) => seekToFrame(Number(e.target.value))}
-              className="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-400 focus:outline-none"
-            />
-          </div>
-
-          {/* Stepping and Quick Marking Action Bar */}
-          <div className="flex flex-wrap items-center justify-between gap-2.5 pt-1.5 border-t border-slate-800/80">
-            {/* Left: Fine Stepping */}
-            <div className="flex items-center gap-1.5 font-mono text-xs">
-              <span className="text-slate-500 mr-1 hidden sm:inline">逐格微調:</span>
-              <button
-                type="button"
-                onClick={() => stepFrame(-5)}
-                className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold active:scale-95 transition-all flex items-center gap-0.5"
-                title="後退 5 幀"
-              >
-                <SkipBack className="w-3.5 h-3.5" />
-                <span>-5</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => stepFrame(-1)}
-                className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold active:scale-95 transition-all"
-                title="後退 1 幀"
-              >
-                -1
-              </button>
-              <button
-                type="button"
-                onClick={() => stepFrame(1)}
-                className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold active:scale-95 transition-all"
-                title="前進 1 幀"
-              >
-                +1
-              </button>
-              <button
-                type="button"
-                onClick={() => stepFrame(5)}
-                className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold active:scale-95 transition-all flex items-center gap-0.5"
-                title="前進 5 幀"
-              >
-                <span>+5</span>
-                <SkipForward className="w-3.5 h-3.5" />
-              </button>
-            </div>
-
-            {/* Middle: Set Current Frame as Release / Glove */}
-            <div className="flex items-center gap-2">
-              {onSetReleaseFrame && (
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => onSetReleaseFrame(currentFrame)}
-                  className="px-3 py-1.5 rounded-lg bg-red-950/80 hover:bg-red-900/90 border border-red-500/50 text-red-200 text-xs font-semibold flex items-center gap-1.5 active:scale-95 transition-all"
-                  title="將當前畫面影格設為出手影格"
-                >
-                  <Pin className="w-3.5 h-3.5 text-red-400" />
-                  <span>設為出手 (F{currentFrame})</span>
-                </button>
-              )}
-
-              {onSetGloveFrame && (
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => onSetGloveFrame(currentFrame)}
-                  className="px-3 py-1.5 rounded-lg bg-amber-950/80 hover:bg-amber-900/90 border border-amber-500/50 text-amber-200 text-xs font-semibold flex items-center gap-1.5 active:scale-95 transition-all"
-                  title="將當前畫面影格設為進手套影格"
-                >
-                  <Target className="w-3.5 h-3.5 text-amber-400" />
-                  <span>設為進手套 (F{currentFrame})</span>
-                </button>
-              )}
-            </div>
-
-            {/* Right: Quick Jump to defined frames */}
-            <div className="flex items-center gap-1.5 font-mono text-xs">
-              <button
-                type="button"
-                onClick={() => seekToFrame(releaseFrame)}
-                className="px-2.5 py-1.5 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-red-400 transition-colors"
-                title="跳轉至已定義出手影格"
-              >
-                跳至出手(F{releaseFrame})
-              </button>
-              <button
-                type="button"
-                onClick={() => seekToFrame(gloveFrame)}
-                className="px-2.5 py-1.5 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-amber-400 transition-colors"
-                title="跳轉至已定義進手套影格"
-              >
-                跳至進手套(F{gloveFrame})
-              </button>
-              <button
-                type="button"
-                onClick={playPitchInterval}
-                className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300"
-                title="重播投球區間"
-              >
-                <RotateCcw className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};
+      {videoUrl&&points.length>0&&<div id="manual-controls" className="bg-[#0b1329]/90 border border-slate-800 rounded-b-xl p-3 space-y-2 text-xs">
+       <input id="video-timeline" aria-label="影片時間軸" type="range" min={0} max={points.length-1} value={index} disabled={busy} onChange={e=>seek(points.get(Number(e.target.value)))} className="w-full accent-cyan-400"/>
+       <div className="flex flex-wrap gap-2">
+        <button type="button" disabled={busy} onClick={togglePlay} className="px-3 rounded bg-blue-600 flex items-center gap-1">{isPlaying?<Pause size={16}/>:<Play size={16}/>} {isPlaying?'暫停':'播放'}</button>
+        <button title="後退 5 幀" disabled={busy} onClick={()=>stepFrame(-5)}>-5</button><button title="後退 1 幀" disabled={busy} onClick={()=>stepFrame(-1)}>-1</button><button title="前進 1 幀" disabled={busy} onClick={()=>stepFrame(1)}>+1</button><button title="前進 5 幀" disabled={busy} onClick={()=>stepFrame(5)}>+5</button>
+       </div>
+       <div className="flex flex-wrap gap-2">
+        <button id="set-release-time" disabled={!canMark} onClick={()=>mark('release')} className="px-3 bg-red-950 border border-red-500/50 rounded flex gap-1 items-center"><Pin size={14}/>設為出手</button>
+        <button id="set-glove-time" disabled={!canMark} onClick={()=>mark('glove')} className="px-3 bg-amber-950 border border-amber-500/50 rounded flex gap-1 items-center"><Target size={14}/>設為進手套</button>
+       </div>
+       <div id="current-time-status" role="status" data-kind={point.kind} data-time={point.timeSec} data-source-index={point.left} data-position-index={index} data-position-count={points.length} data-decoded-time={decodedTime??''} className="text-cyan-200">
+        {point.kind==='interpolated'?'推算':assumed?'原始定位（CFR假設）':'原始'} · {point.kind==='interpolated'?`F${point.left}→${point.right}`:`F${point.left}`} · {point.timeSec.toFixed(6)}s · 來源 {fps.toFixed(4)} FPS／{assumed?'時間位置數（原始數未確認）':'原始影格'} {totalFrames}
+       </div>
+       <div className="flex flex-wrap gap-2 items-center">
+        <button id="mode-source" aria-pressed={!fine} disabled={busy} onClick={()=>switchMode(false)}>原始模式</button><button id="mode-fine" aria-pressed={fine} disabled={busy||fps>=90-1e-6} onClick={()=>switchMode(true)}>90 FPS 推算</button>
+        <label>時間(s)<input id="timeline-time-input" aria-label="定位影片時間" type="number" step="any" min={timestamps[0]??0} max={timestamps.at(-1)??0} value={point.timeSec} disabled={busy} onChange={e=>{const p=points.get(points.nearest(Number(e.target.value)));if(p)seek(p);}} className="w-28"/></label>
+        {!fine&&<label>原始索引<input id="source-frame-input" aria-label="定位原始影格" type="number" min={0} max={timestamps.length-1} value={point.left} disabled={busy} onChange={e=>{const f=Math.max(0,Math.min(timestamps.length-1,Math.round(Number(e.target.value))));seek(points.get(f));}} className="w-20"/></label>}
+       </div>
+       <div className="flex flex-wrap gap-2"><button id="jump-release-time" disabled={!events.release||busy} onClick={()=>jump(events.release)}>出手 {events.release?`${events.release.timeSec.toFixed(6)}s · ${events.release.kind==='interpolated'?'推算':events.release.kind==='cfr_assumed'?'CFR假設':'原始'}`:'未設定'}</button><button id="jump-glove-time" disabled={!events.glove||busy} onClick={()=>jump(events.glove)}>進手套 {events.glove?`${events.glove.timeSec.toFixed(6)}s · ${events.glove.kind==='interpolated'?'推算':events.glove.kind==='cfr_assumed'?'CFR假設':'原始'}`:'未設定'}</button></div>
+       {fine&&<p className="text-[11px] text-amber-200">90Hz 網格＋全部原始PTS；相鄰位置間距可變，並非90FPS實拍。{previewState==='processing'?'局部補幀處理中…':previewState==='failed'?previewError:preview?.quality.note??''} {preview&&`${preview.quality.level==='low'?'低品質，可退回原始模式':'品質有限'}；運動區一致性 ${(preview.quality.reliableFraction*100).toFixed(0)}%（非棒球精度）`}</p>}
+       {!fine&&decodedTime===null&&<p className="text-[11px] text-slate-400">原始PTS定位；瀏覽器未回報呈現時刻時，不保證逐樣本精確解碼。</p>}
+      </div>}
+    </div>;
+}
