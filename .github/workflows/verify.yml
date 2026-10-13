@@ -12,3 +12,13 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm run verify
       - run: pnpm run build
+      - name: Deploy verified push to Render
+        if: github.event_name == 'push' && github.ref == 'refs/heads/baseline-v4'
+        env:
+          RENDER_DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
+        run: |
+          if [ -z "$RENDER_DEPLOY_HOOK" ]; then
+            echo 'RENDER_DEPLOY_HOOK is not configured; public Git URL services require a deploy hook or Git provider connection for automatic updates.'
+            exit 0
+          fi
+          curl --fail --silent --show-error --output /dev/null "${RENDER_DEPLOY_HOOK}&ref=${GITHUB_SHA}"

@@ -31,7 +31,7 @@ pnpm run test:e2e
 
 公開來源庫 https://github.com/T22016AEMC/PitchVision-v4 ，開發分支 `baseline-v4`。部署使用 Render Static Site，建置與更新見 DEPLOYMENT.md。基本 React 分析不需使用者登入或 Python 伺服器。
 
-修改後執行 verify / build，檢查 git diff，commit 並 push `origin baseline-v4`；Render 自動建置。到公開 HTTPS 再執行上述影片驗收。失敗時先查看 Actions／Render log；不要修改 baseline 或資料庫使測試通過。
+修改後執行 verify / build，檢查 git diff，commit 並 push `origin baseline-v4`；設定一次 RENDER_DEPLOY_HOOK Secret 後，Actions 驗證成功會觸發 Render 建置。到公開 HTTPS 再執行上述影片驗收。失敗時先查看 Actions／Render log；不要修改 baseline 或資料庫使測試通過。
 
 Python `app.py` 與 UI 可下載的原始碼均保留；其 Streamlit 執行環境未部署、未驗收。它與 React 引擎並不等價。
 

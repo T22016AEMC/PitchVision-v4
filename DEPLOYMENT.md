@@ -13,10 +13,14 @@ React / TypeScript 影片載入、追蹤及物理計算全部在瀏覽器本機�
 - Build Command：`corepack pnpm install --frozen-lockfile && corepack pnpm run verify && corepack pnpm run build`
 - Publish Directory：dist
 - Environment：NODE_VERSION=22、SKIP_INSTALL_DEPS=true；無秘密憑證
-- Auto Deploy：Yes / On Commit
+- 自動更新：Actions 驗證成功後呼叫 RENDER_DEPLOY_HOOK；初次需下方一次性設定
 - 設定參考：render.yaml
 
-若 Public Git Repository 模式未收到推送事件，需在 Dashboard 連接 Git provider，或用 Render trigger_deploy 手動部署。以實際服務設定及新推送部署事件確認自動更新。
+實測文件推送未產生部署事件。Render Public Git URL 模式不支援內建自動部署，API autoDeploy=yes 不代表有 webhook 連線。參考 https://render.com/docs/deploys 。
+
+一次性設定（不需要PAT或映像憑證）：到上述 Static Site 的 Settings → Deploy Hook 複製URL，直接存入 GitHub repo Settings → Secrets and variables → Actions → New repository secret，名稱 `RENDER_DEPLOY_HOOK`。不要貼到聊天或程式碼。既有 verify workflow 已加入成功建置後的安全呼叫，未設定時會明確記錄沒有自動部署。
+
+亦可在 Render 連接 Git provider 改用內建 auto deploy；本方案使用 Deploy Hook以避免額外GitHub App。
 
 ## 更新
 

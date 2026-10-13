@@ -20,7 +20,7 @@ Static Site 已成功建立且首部署為 live，詳見 DEPLOYMENT.md。測試�
 - name pitchvision-v4-baseline
 - service srv-db74o5rncjis73fgq31g
 - URL https://pitchvision-v4-baseline.onrender.com
-- branch baseline-v4 / publish dist / autoDeploy yes
+- branch baseline-v4 / publish dist；Public Git URL模式無內建自動部署，Actions hook待使用者設定一次Secret
 - 前端不需後端、憑證或登入
 
 公開 HTTPS 兩支影片已完成測試，17項檢查通過、沒有pageerror。記錄在 test-results/public/acceptance.json，結果與本地一致。ACCEPTANCE.md及清單已更新。不可把測試影片或截圖放到 public。

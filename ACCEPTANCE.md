@@ -43,4 +43,6 @@ Render Static Site `srv-db74o5rncjis73fgq31g`，首部署 `dep-db74o6bncjis73fgq
 
 網站可匿名透過公網HTTPS開啟，不依賴localhost或同一Wi-Fi。實際手機行動網路／不同網路的物理裝置測試尚未執行，不能以桌面驗收宣稱完成。
 
+自動更新：測試推送702c1ae沒有Render部署事件，Public Git URL模式不支援原生自動部署。已準備verify成功後呼叫Deploy Hook的Actions步驟，需在GitHub設定一次RENDER_DEPLOY_HOOK Secret；尚未宣稱自動更新驗收通過。
+
 尚未完成真實 iPhone／Android、多網路／行動網路、長影片／4K 壓力測試、Python Streamlit 獨立執行。原始 demo 缺檔；科學與座標限制見 SCIENTIFIC_ISSUES.md。不宣稱全部驗收通過。
