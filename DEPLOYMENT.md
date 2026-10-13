@@ -1,29 +1,33 @@
-# 部署：Private GitHub → GitHub Actions → Private GHCR → Render Existing Image
+# 簡單部署：Public GitHub → Render Static Site
 
-Render 不連接原始碼儲存庫，也不安裝 Render GitHub App。原 Git-backed Static Site 方案停止使用。現有 Render 連接器只能建立 Git-backed 服務，沒有直接產物上傳／預建映像建立能力；首次建立 image-backed Web Service 需 Render Dashboard。
+React / TypeScript 影片載入、追蹤及物理計算全部在瀏覽器本機執行，不需常駐後端。停止 GHCR/PAT/Existing Image 流程，已移除自動映像發布 workflow。既有 Docker 檔案保留為備用；Static Site 不使用它們。
 
-## 已備妥的產物
+## 設定
 
-工作流程 `.github/workflows/publish-image.yml` 在 baseline-v4 程式推送後以臨時 GITHUB_TOKEN（contents:read/packages:write）建置 linux/amd64，先執行型別、256組回歸與 Build，再測試容器 HTTP，發布到 `ghcr.io/t22016aemc/pitchvision-v4`。首次包預設 Private，不變更可見性。沒有在程式碼或映像存放憑證。
+- Repository：https://github.com/T22016AEMC/PitchVision-v4 （Public）
+- Branch：baseline-v4
+- Root Directory：留空
+- Build Command：`corepack pnpm install --frozen-lockfile && corepack pnpm run verify && corepack pnpm run build`
+- Publish Directory：dist
+- Environment：NODE_VERSION=22、SKIP_INSTALL_DEPS=true；無秘密憑證
+- Auto Deploy：Yes / On Commit
+- 設定參考：render.yaml
 
-Docker 最終層只含 dist 與 Node 靜態伺服器。原碼快照只在 builder，測試影片被 gitignore/dockerignore 排除。使用 SHA tag 可追溯版本，baseline tag 供簡單更新。
-
-## 一次性的必要設定（由使用者在官方頁面完成）
-
-1. GitHub 建立 **Personal access token (classic)**，用途 `pitchvision-render-pull`，僅勾選 **read:packages**，自行選擇有效期限。不需要 repo/write:packages/delete:packages。不要把 token 貼到對話或程式碼。
-2. Render Workspace Settings → **Container Registry Credentials** → Add Credential：名稱 `pitchvision-ghcr-read`，Registry GitHub Container Registry，Username `T22016AEMC`，在 PAT 欄輸入上一步 token。
-3. Render + New → **Web Service** → **Existing Image**。輸入發布成功的 `ghcr.io/t22016aemc/pitchvision-v4:sha-<commit>`（完整值以 Actions summary 為準），選取上述 credential。
-4. Name `pitchvision-v4`，Region **Singapore**，Instance Type **Free**，Health Check `/healthz`，保留映像預設 command，Deploy。沒有 Git Repo、build command 或 start override。
-5. 回報 service ID 或公開網址即可，勿傳送任何密鑰。Codex 可用 Render connector 查部署狀態，再在公開網址執行兩支本機影片驗收。
-
-官方說明：[Render prebuilt images](https://render.com/docs/deploying-an-image)、[GHCR 認證與 Private 預設](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)。
+若 Public Git Repository 模式未收到推送事件，需在 Dashboard 連接 Git provider，或用 Render trigger_deploy 手動部署。以實際服務設定及新推送部署事件確認自動更新。
 
 ## 更新
 
-修改、verify/build、commit、push baseline-v4；Actions 發布新的 sha tag。Render Dashboard 更換 Image URL 為新 sha tag並部署。若服務設定使用 baseline tag，發布後使用 Manual Deploy → Deploy latest image，或讓 Codex 呼叫 trigger_deploy。image-backed 服務不會只因 tag 更新而自動部署。
+執行 `pnpm run verify`、`pnpm run build`，commit 並 push `origin baseline-v4`。Render 也執行相同驗證，通過才發布 dist。公開影片驗收：
 
-可選自動化：之後把 Render Deploy Hook 存為 GitHub Actions Secret，再接入發佈後的部署步驟；本次不要求此額外機密設定。
+```powershell
+$env:BASE_URL='https://YOUR-STATIC-SITE.onrender.com'
+pnpm run test:e2e
+```
 
-## 成本與限制
+使用本機上層 test videos 中的兩部影片，影片及其畫面不提交。真實手機、行動網路及人工量測精度仍须另驗證。
 
-只選 Render Free，未購買資源。GitHub Actions 使用帳號既有額度。Render Free 冷啟動會延遲首頁，但影片運算仍在手機瀏覽器本機執行。Token 到期須在 Render 更新 registry credential，否則後續重新拉取映像會失敗。
+## 原始碼與歷史檢查
+
+`node scripts/audit-history.mjs` 檢查所有可達 Git 歷史的影片／實際 .env 路徑，以及常見 GitHub、Render、OpenAI、Google、AWS 金鑰及 private key 格式。只輸出位置，不輸出秘密。2026-10-13 檢查123個物件、80份文字blob，無命中。原 `.env.example` 僅有佔位值。
+
+此檢查不保證識別所有未知秘密格式。GitHub 登入僅使用 OS credential helper，不存憑證於程式碼。

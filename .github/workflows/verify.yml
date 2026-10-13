@@ -1,5 +1,5 @@
 name: Verify baseline
-on: [pull_request, workflow_dispatch]
+on: [push, pull_request, workflow_dispatch]
 jobs:
   verify:
     runs-on: ubuntu-latest
