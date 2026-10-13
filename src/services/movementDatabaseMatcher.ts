@@ -1,3 +1,4 @@
+import { pitchTypeIdentity } from './pitchTypeIdentity';
 import {
   PitchRecord,
   DatabaseMatchCandidate,
@@ -87,8 +88,6 @@ export class MovementDatabaseMatcher {
     ) {
       typeFilteredPool = viewPool.filter((r) => {
         return (
-          r.pitch_type.includes(normalizedTargetType) ||
-          normalizedTargetType.includes(r.pitch_type) ||
           this.matchPitchTypeAlias(r.pitch_type, normalizedTargetType)
         );
       });
@@ -312,34 +311,7 @@ export class MovementDatabaseMatcher {
    * 球種名稱別名映射
    */
   private static matchPitchTypeAlias(dbType: string, selectedType: string): boolean {
-    const s = selectedType.toLowerCase();
-    const d = dbType.toLowerCase();
-
-    if (s.includes('fastball') || s.includes('四縫線') || s.includes('ff')) {
-      return d.includes('fastball') || d.includes('四縫線') || d.includes('ff');
-    }
-    if (s.includes('sinker') || s.includes('二縫線') || s.includes('伸卡') || s.includes('si')) {
-      return d.includes('sinker') || d.includes('二縫線') || d.includes('伸卡') || d.includes('si');
-    }
-    if (s.includes('slider') || s.includes('滑球') || s.includes('sl')) {
-      return d.includes('slider') || d.includes('滑球') || d.includes('sl');
-    }
-    if (s.includes('cutter') || s.includes('卡特') || s.includes('fc')) {
-      return d.includes('cutter') || d.includes('卡特') || d.includes('fc');
-    }
-    if (s.includes('curve') || s.includes('曲球') || s.includes('cu')) {
-      return d.includes('curve') || d.includes('曲球') || d.includes('cu');
-    }
-    if (s.includes('change') || s.includes('變速') || s.includes('ch')) {
-      return d.includes('change') || d.includes('變速') || d.includes('ch');
-    }
-    if (s.includes('split') || s.includes('指叉') || s.includes('fs')) {
-      return d.includes('split') || d.includes('指叉') || d.includes('fs');
-    }
-    if (s.includes('sweep') || s.includes('橫掃') || s.includes('st')) {
-      return d.includes('sweep') || d.includes('橫掃') || d.includes('st');
-    }
-
-    return false;
+    const key = pitchTypeIdentity(selectedType);
+    return key !== null && key === pitchTypeIdentity(dbType);
   }
 }

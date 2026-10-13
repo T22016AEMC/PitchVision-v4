@@ -1,6 +1,6 @@
-# V3 既有科學與資料問題（V4 Baseline 不修正）
+# V3／V4 歷史科學問題與 V4.1 處理狀態
 
-本文件描述限制，不代表校準完成。公式、係數、權重、資料庫及信心計算保留 V3。
+以下編號條目保留 V4 Baseline 時的發現與結果，並非 V4.1 的最新數值；Baseline當時保留 V3 計算。V4.1已授權修正，最新驗收見 V41_ACCEPTANCE.md。資料庫保持原樣，不能將修正或回歸測試當成實測校準。
 
 1. **FPS / VFR**：`videoTimingService.ts` 從檔名提示或 RVFC 估計 FPS，否則用 30。沒有真正解析 MP4 sample timestamps；生成等間隔時間戳且 `isVFR=false`。檔名提示被原碼標成 container_metadata。暫停的 probe video 常無法取得 10 個 RVFC，因而 fallback。V4 僅修正估計 FPS 警示欄位與 callback 清理，沒有改變推算方式。
 2. **球種別名過寬**：`movementDatabaseMatcher.ts` 的 curve 分支使用 `d.includes('cu')`，亦可匹配 Cutter；Knuckle Curve 未獨立限定。本地彈指曲球測試在 Strict Mode 下產生 180 候選及 Cutter Top 3。此驗收項目失敗，需後續獨立演算法修正。
@@ -13,3 +13,9 @@
 9. **手動錨點**：原播放器以包含 object-contain 留白的容器座標正規化，直橫影片比例不符時可能偏移。保留原行為並標記未通過精度驗收。
 
 確定性回歸通過只證明相同輸入的 V3/V4 結果一致，不證明上述模型正確。
+
+## V4.1
+
+1、8：新增MP4 PTS／VFR解析與seek完成等待，不再由檔名決定FPS；精確解碼仍受瀏覽器限制。2：精確別名已修復，KC不混入Cutter。9：object-contain留白座標已修正。
+
+3、4、5：新增追蹤外觀／連續性／殘差、已知尺度平面姿態與條件物理重建；未取得有效證據時降低信心，零重疊不再給50%擬合，原未截限值及模型邊界透明揭露。兩部影片仍無有效投球事件與球軌跡，沒有完整自動3D與精度真值；這些驗收尚未通過。6、7資料與獨立Python環境限制不變。

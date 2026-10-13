@@ -31,7 +31,7 @@ export const FrameSlidersCard: React.FC<FrameSlidersCardProps> = ({
   onChangeVisibleEndFrame,
   onSeekVideoFrame,
 }) => {
-  const maxAvailable = totalVideoFrames > 0 ? totalVideoFrames : 500;
+  const maxAvailable = totalVideoFrames > 0 ? totalVideoFrames - 1 : 0;
   const safeFps = fps > 0 ? fps : 30;
 
   const handleReleaseChange = (val: number) => {

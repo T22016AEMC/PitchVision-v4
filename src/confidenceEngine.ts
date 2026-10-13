@@ -146,7 +146,8 @@ export function calculateUnifiedConfidence(input: ConfidenceInput): UnifiedConfi
     const agreement = videoMetrics.forward_backward_agreement_pct || 72;
     trajConf = Math.round(agreement * 0.68 + cameraCalibrationQuality * 0.2);
   }
-  trajConf = Math.max(18, Math.min(95, trajConf));
+  trajConf = trajectoryFitScore === 0 ? 0 : Math.max(18, Math.min(95, trajConf));
+  if (trajectoryFitScore === 0) notes.push('無足夠獨立觀測，前向擬合未驗證；不授予擬合信心');
 
   // 5. 資料庫反推與候選收斂可信度 (考慮相似度、候選離散度、物理一致性、出手角估計狀態)
   const spreadPenalty = Math.min(22, Math.max(0, (candidateSpreadRpm - 50) * 0.08));

@@ -1,3 +1,5 @@
+import { CameraGeometry } from './services/cameraGeometry';
+import { inferActiveSpin, measureConditionedMovement, forwardProjectedModel } from './services/conditionedPhysics';
 import {
   PitchRecord,
   MatchResult,
@@ -317,6 +319,8 @@ export function calibrateWithAIVisual(
     cameraView,
     spatialCalibration: spatialCalib,
     videoMetrics,
+    videoWidth: spatialCalib.camera_geometry?.width || 720,
+    videoHeight: spatialCalib.camera_geometry?.height || 1280,
     timestamps
   });
 
@@ -354,11 +358,24 @@ export function calibrateWithAIVisual(
     velocityUncertaintyKmh: observedPhysics.velocity_uncertainty_kmh
   });
 
-  const finalSpin = spinInference.finalSpinRateRpm;
-  const finalSpinAxis = spinInference.finalSpinAxis;
-  const finalAxisDecimal = spinInference.finalSpinAxisDecimal;
+  let finalSpin = spinInference.finalSpinRateRpm;
+  let finalSpinAxis = spinInference.finalSpinAxis;
+  let finalAxisDecimal = spinInference.finalSpinAxisDecimal;
   const finalEfficiency = spinInference.inferredEfficiencyPct;
 
+  let conditioned: ReturnType<typeof measureConditionedMovement> | null=null;
+  if(observedPhysics.movement_valid && spatialCalib.camera_geometry?.method==='planar_reference') {
+    conditioned=measureConditionedMovement(videoTrack||[],spatialCalib.camera_geometry,timestamps?.[releaseFrame]??releaseFrame/fps,effectiveFlightSec,spatialCalib.effective_travel_distance_m);
+    const physical=inferActiveSpin(conditioned.ax,conditioned.ay,effectiveVelocity,finalEfficiency);
+    const accelerationError=conditioned.uncertainty*0.0254*2/(effectiveFlightSec*effectiveFlightSec);
+    if(physical && Math.hypot(conditioned.ax,conditioned.ay)>2*accelerationError){finalSpin=Math.round(physical.rpm/10)*10;finalAxisDecimal=physical.axisDecimal;finalSpinAxis=formatClockTime(finalAxisDecimal);
+      spinInference.uncertainty.spin_rate_range='Efficiency先驗條件下的RPM；總RPM不可唯一解';
+      spinInference.uncertainty.uncertainty_basis=physical.basis+'；'+conditioned.basis;
+      const axisMinutes=Math.atan2(accelerationError,Math.hypot(conditioned.ax,conditioned.ay))*360/Math.PI;
+      spinInference.uncertainty.spin_axis_range=`±${axisMinutes.toFixed(1)}時鐘分鐘（殘差/像素敏感度，非完整信賴區間）`;
+      spinInference.uncertainty.ivb_range=spinInference.uncertainty.hb_range=`±${conditioned.uncertainty.toFixed(1)}吋（合成敏感度）`;
+    }else{conditioned=null;observedPhysics.movement_valid=false;observedPhysics.details.push('Magnus合力超出既有CL模型適用範圍，保留先驗反推並降低信心');}
+  }
   // ===========================================================================
   // STEP 4: 真正的物理重建 (Physics Reconstruction: Gravity + Drag + Magnus)
   // 由 Velocity + Inferred RPM + Inferred Spin Axis + Release Angle 獨立積分生成 MODEL TRACK
@@ -380,7 +397,7 @@ export function calibrateWithAIVisual(
         }
       : undefined;
 
-  const {
+  let {
     modelTrack,
     reconstructedIvbInch,
     reconstructedHbInch
@@ -400,14 +417,15 @@ export function calibrateWithAIVisual(
     endAnchorNorm
   });
 
+  if(conditioned && spatialCalib.camera_geometry){const forward=forwardProjectedModel(spatialCalib.camera_geometry,conditioned,spatialCalib.effective_travel_distance_m,effectiveFlightSec,finalSpin,finalAxisDecimal,finalEfficiency,releaseFrame,gloveFrame,fps,timestamps);modelTrack=forward.modelTrack;reconstructedIvbInch=forward.reconstructedIvbInch;reconstructedHbInch=forward.reconstructedHbInch;}
   // ===========================================================================
   // STEP 5: 前向閉環驗證 (Forward Validation: VIDEO TRACK vs PHYSICS MODEL TRACK)
   // ===========================================================================
   const trajectoryFit = TrajectoryFitEngine.evaluateTrajectoryFit({
     videoTrack: activeVideoTrack,
     modelTrack,
-    videoWidth: 720,
-    videoHeight: 1280
+    videoWidth: spatialCalib.camera_geometry?.width || 720,
+    videoHeight: spatialCalib.camera_geometry?.height || 1280
   });
 
   // 計算綜合特徵相似度與候選平均物理一致性
@@ -440,38 +458,40 @@ export function calibrateWithAIVisual(
     isInsufficientPitchTypeData: matcherResult.isInsufficientPitchTypeData,
     physicsConsistencyScore: avgPhysicsConsistency,
     isReleaseAngleEstimated: observedPhysics.is_release_angle_estimated,
-    cameraCalibrationQuality: spatialCalib.is_true_homography ? 90 : 72
+    cameraCalibrationQuality: (spatialCalib.camera_geometry?.quality || 0.2) * 100
   });
 
   // ===========================================================================
   // STEP 6: 組裝 Analysis Basis 與最終結果
   // ===========================================================================
+  if(!observedPhysics.movement_valid){confScores.movement_confidence=Math.min(confScores.movement_confidence||0,35);confScores.spin_confidence=Math.min(confScores.spin_confidence||0,30);confScores.overall_confidence=Math.min(confScores.overall_confidence,40);confScores.quality_notes.push(observedPhysics.movement_limitation||"幾何約束不足");}
+  if(spatialCalib.camera_geometry?.method!=='planar_reference'){confScores.velocity_confidence=Math.min(confScores.velocity_confidence||0,50);confScores.quality_notes.push('距離為身高/跨步先驗推估，速度區間未含距離系統誤差。');}
   const hasRealTrack = Boolean(
     videoTrack &&
-    videoTrack.length >= 3 &&
-    videoMetrics?.tracking_quality_status !== 'insufficient'
+    videoTrack.filter(p=>p.source==='vision').length >= 4 &&
+    videoMetrics?.tracking_quality_status === 'reliable'
   );
 
   const analysisBasis: AnalysisBasisInfo = {
     velocity: {
       source: 'VIDEO DERIVED',
-      description: `Based on measured flight time (${effectiveFlightSec.toFixed(3)}s @ ${fps.toFixed(1)} FPS) + calibrated travel distance (${spatialCalib.effective_travel_distance_m}m)`
+      description: `影片選取時間差 ${effectiveFlightSec.toFixed(3)}s；距離 ${spatialCalib.effective_travel_distance_m}m (${spatialCalib.camera_geometry?.method==='planar_reference'?'使用者已知平面尺度':'身高/跨步先驗估算'})，時間敏感度不含距離誤差`
     },
     movement: {
       source: observedPhysics.movement_source,
-      description: `畫面像素位移 (ΔX ${observedPhysics.horizontal_movement_2d_px}px, ΔY ${observedPhysics.vertical_movement_2d_px}px) 經 Perspective / Scale Calibrated Estimate 與重力扣除解算`
+      description: observedPhysics.movement_limitation || '需確認尺度與深度約束'
     },
     spin_rate: {
-      source: 'MOVEMENT-INFERRED',
+      source: conditioned?'PHYSICS-CONDITIONED SPIN / EFFICIENCY PRIOR':'DATABASE PRIOR / LEGACY MANUAL INFERENCE',
       description: `Pitch Type + Velocity (±${matcherResult.effectiveVelocityWindowKmh} km/h) + Movement Database Matching (Top ${candidates.length} weighted interpolation + Release Angle correction)`
     },
     spin_axis: {
-      source: 'MOVEMENT-INFERRED',
+      source: conditioned?'PHYSICS-CONDITIONED DIRECTION':'DATABASE PRIOR / LEGACY MANUAL INFERENCE',
       description: `Pitch Type + Movement Direction + Database Matching (Circular sin/cos weighted interpolation)`
     },
     release_angle: {
       source: observedPhysics.is_release_angle_estimated ? 'MODEL ESTIMATED' : 'VIDEO DERIVED',
-      description: observedPhysics.is_release_angle_estimated
+      description: conditioned?'已知平面+深度假設下的初始速度方向，非唯一3D實測':observedPhysics.is_release_angle_estimated
         ? `影像初期觀測點不足，依投手生物力學與臂槽先驗 (${spatialCalib.arm_slot_name} ${observedPhysics.observed_release_angle_deg.toFixed(1)}°) 估算`
         : `由出手初段影像運動切線向量測量 (${observedPhysics.observed_release_angle_deg.toFixed(1)}°)`
     },
@@ -496,7 +516,7 @@ export function calibrateWithAIVisual(
     `【觀測位移 (Movement)】: IVB ${observedIvb >= 0 ? '+' : ''}${observedIvb}" / HB ${observedHb >= 0 ? '+' : ''}${observedHb}" [${observedPhysics.movement_source}]`,
     `【反推轉速 (Estimated Spin Rate)】: ≈ ${finalSpin} RPM (${spinInference.uncertainty.spin_rate_range})，由同球種速度窗口 (±${matcherResult.effectiveVelocityWindowKmh} km/h) 內 Top ${candidates.length} 筆樣本加權內插並經出手角微調 [MOVEMENT-INFERRED]`,
     `【反推轉軸 (Estimated Spin Axis)】: ≈ ${finalSpinAxis} (${spinInference.uncertainty.spin_axis_range})，經圓周向量平均 (Circular Interpolation) 推得 [MOVEMENT-INFERRED]`,
-    `【物理重建閉環驗證 (Physics Reconstruction)】: 以 RPM ${finalSpin} + Axis ${finalSpinAxis} + Gravity + Drag + Magnus 獨立生成 MODEL TRACK，與 VIDEO TRACK 比對 RMSE = ${trajectoryFit.rmse_px}px (${trajectoryFit.fit_quality})`,
+    `【物理重建閉環驗證 (Physics Reconstruction)】: 以 RPM ${finalSpin} + Axis ${finalSpinAxis} + Gravity + Drag + Magnus 生成 MODEL TRACK；${trajectoryFit.fit_quality==='NOT_VALIDATED'?'無足夠觀測，RMSE未驗證':`RMSE = ${trajectoryFit.rmse_px}px (${trajectoryFit.fit_quality})`}`,
     `【參考資料集 (Database Source)】: PitchVision Synthetic Physics Reference Dataset (Synthetic Physics Prior, 同球種候選 ${matcherResult.matchedRecordCount} 筆)`
   ];
 
@@ -529,7 +549,7 @@ export function calibrateWithAIVisual(
     db_baseline_velocity: primaryCandidate.velocity_kmh,
     ai_correction_velocity: Number((effectiveVelocity - primaryCandidate.velocity_kmh).toFixed(1)),
     db_baseline_spin: spinInference.baseSpinRateRpm,
-    ai_correction_spin: spinInference.rpmCorrectionApplied,
+    ai_correction_spin: conditioned?finalSpin-spinInference.baseSpinRateRpm:spinInference.rpmCorrectionApplied,
     spin_rate_calibration_reason: `Angle correction applied: 出手角 ${observedPhysics.observed_release_angle_deg.toFixed(1)}° 修正 ${spinInference.rpmCorrectionApplied >= 0 ? '+' : ''}${spinInference.rpmCorrectionApplied} RPM (主體由 Top ${candidates.length} 候選位移反查加權內插)`,
 
     db_baseline_axis: spinInference.baseSpinAxis,
@@ -541,7 +561,7 @@ export function calibrateWithAIVisual(
     ai_correction_ivb: Number((observedIvb - primaryCandidate.ivb_inch).toFixed(1)),
     db_baseline_hb: primaryCandidate.hb_inch,
     ai_correction_hb: Number((observedHb - primaryCandidate.hb_inch).toFixed(1)),
-    calibration_notes: `Perspective / Scale Calibrated Estimate + Physics Reconstruction 完成。位移是觀測值，RPM / Spin Axis 是推論結果。`,
+    calibration_notes: observedPhysics.movement_valid ? "已知平面+時間/深度條件估計；非唯一真實3D" : "未完成度量標定：保留原手動模型參考，IVB/HB與RPM/Axis不可視為實測。",
     spatial_calibration: spatialCalib,
     trajectory_points: modelTrack,
     top_candidates: candidates,
@@ -554,8 +574,8 @@ export function calibrateWithAIVisual(
 
     // 嚴格落實數據來源標籤
     source_velocity: 'VIDEO DERIVED',
-    source_rpm: 'DATABASE ESTIMATED / MOVEMENT-INFERRED',
-    source_spin_axis: 'DATABASE ESTIMATED / MOVEMENT-INFERRED',
+    source_rpm: conditioned?'MODEL ESTIMATED':'DATABASE ESTIMATED',
+    source_spin_axis: conditioned?'MODEL ESTIMATED':'DATABASE ESTIMATED',
     source_spin_efficiency: 'DATABASE ESTIMATED',
     source_ivb: observedPhysics.movement_source,
     source_hb: observedPhysics.movement_source,
@@ -610,7 +630,8 @@ export function matchPitchData(
   strictPitchTypeMode: boolean = true,
   allowCrossTypeFallback: boolean = false,
   isManualAnchorUsed: boolean = false,
-  autoDetectionConfidence?: number
+  autoDetectionConfidence?: number,
+  cameraGeometry?: CameraGeometry
 ): MatchResult {
   const spatialStandardization = alignAndStandardizeVideoSpatialContext(
     releaseFrame,
@@ -619,9 +640,16 @@ export function matchPitchData(
     cameraView,
     selectedPitchType,
     biometrics,
-    timestamps
+    timestamps,
+    cameraGeometry
   );
 
+  spatialStandardization.spatialCalibration.camera_geometry=cameraGeometry;
+  if(cameraGeometry?.method==='planar_reference'){
+    spatialStandardization.spatialCalibration.view_angle_azimuth_deg=cameraGeometry.azimuthDeg;
+    spatialStandardization.spatialCalibration.view_angle_elevation_deg=cameraGeometry.elevationDeg;
+    spatialStandardization.spatialCalibration.calibration_status='已知平面相機估計；離地球深度仍需假設';
+  }
   const effectiveVelocity = spatialStandardization.standardizedVelocityKmh || queryVelocity;
   const effectiveFlightTime = spatialStandardization.standardizedFlightSec || queryFlightTime;
 

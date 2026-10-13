@@ -1,4 +1,6 @@
 import { BallCandidate, BallObservation, CameraViewMode, ManualAnchorInput } from '../types';
+import { isCompactBrightRegion } from './compactBallAppearance';
+import { motionForeground } from './motionForeground';
 
 export interface BallDetectionEngineOptions {
   width: number;
@@ -45,6 +47,7 @@ export class BallDetectionEngine {
     const h = currImage.height;
     const currData = currImage.data;
     const prevData = prevImage?.data;
+    const movingBody=motionForeground(currImage,prevImage).bounds;
 
     const xStart = Math.max(0, Math.floor(roi.xMin * w));
     const xEnd = Math.min(w, Math.ceil(roi.xMax * w));
@@ -79,6 +82,16 @@ export class BallDetectionEngine {
           motionScore = Math.min(1.0, frameDiff / 60.0);
         }
 
+        if (prevData && motionScore < 0.25) continue;
+        const rr = Math.max(3, Math.round(this.expectedRadius));
+        let ring = 0, samples = 0;
+        for (const [ox,oy] of [[-rr,0],[rr,0],[0,-rr],[0,rr]]) {
+          const xx=Math.max(0,Math.min(w-1,x+ox)), yy=Math.max(0,Math.min(h-1,y+oy)), ii=(yy*w+xx)*4;
+          ring+=(currData[ii]+currData[ii+1]+currData[ii+2])/3;samples++;
+        }
+        if (brightness-ring/samples < 12) continue;
+        if (!isCompactBrightRegion(currImage,x,y,this.expectedRadius*2)) continue;
+        if(movingBody&&x/w>=movingBody.xMin&&x/w<=movingBody.xMax&&y/h>=movingBody.yMin&&y/h<=movingBody.yMax)continue;
         // 3. Spatial & Pitch Corridor: 與預測走廊的距離
         let spatialScore = 0.8;
         let jumpPenalty = 0.0;

@@ -1,3 +1,4 @@
+import { assessTrackEvidence } from './trackEvidence';
 import { BallObservation, BaseballTrackPoint, VideoTrackMetrics } from '../types';
 
 /**
@@ -97,7 +98,7 @@ export function validateAndReconstructVideoTrack(
   // 2. 檢驗觀測點間隙與時間連續性 (Temporal & Trajectory Consistency)
   let maxGap = 0;
   // FPS 動態調整允許的最大補點間隙 (約 0.25 秒)
-  const allowedMaxGap = Math.max(3, Math.round(actualFps * 0.25));
+  const allowedMaxGap = Math.max(2, Math.round(actualFps * 0.08));
 
   for (let i = 0; i < visionObs.length - 1; i++) {
     const gap = visionObs[i + 1].frame - visionObs[i].frame;
@@ -110,10 +111,11 @@ export function validateAndReconstructVideoTrack(
   const sumConf = visionObs.reduce((acc, cur) => acc + cur.confidence, 0);
   const meanConfidence = Number((sumConf / realObservationCount).toFixed(3));
 
-  if (meanConfidence < 0.50) {
+  const evidence = assessTrackEvidence(visionObs, actualFps);
+  if (meanConfidence < 0.50 || !evidence.valid) {
     return {
       status: 'insufficient_evidence',
-      failureReason: `Insufficient visual evidence：觀測點平均信賴度不足 (${(meanConfidence * 100).toFixed(1)}% < 50.0%)`,
+      failureReason: `軌跡閘門：${evidence.reasons.join("、")}；Insufficient visual evidence：觀測點平均信賴度不足 (${(meanConfidence * 100).toFixed(1)}% < 50.0%)`,
       videoTrack: [],
       metrics: {
         horizontal_movement_2d_norm: 0,
@@ -159,7 +161,7 @@ export function validateAndReconstructVideoTrack(
     if (direct) {
       trackPoints.push({
         frame: f,
-        timestamp: Number((f / actualFps).toFixed(4)),
+        timestamp: direct.timestamp,
         x: direct.x,
         y: direct.y,
         x_norm: direct.x_norm,
@@ -195,7 +197,7 @@ export function validateAndReconstructVideoTrack(
 
           trackPoints.push({
             frame: f,
-            timestamp: Number((f / actualFps).toFixed(4)),
+            timestamp: prevObs.timestamp + (nextObs.timestamp - prevObs.timestamp) * t,
             x: Math.round(interpX * videoWidth),
             y: Math.round(interpY * videoHeight),
             x_norm: Number(interpX.toFixed(4)),
@@ -234,7 +236,7 @@ export function validateAndReconstructVideoTrack(
       horizontal_movement_2d_px: dxPx,
       vertical_movement_2d_px: dyPx,
       total_movement_2d_px: totalPx,
-      trajectory_curvature_score: 88,
+      trajectory_curvature_score: evidence.score * 100,
       vision_detected_frames_count: realObservationCount,
       interpolated_frames_count: interpolatedCount,
       tracking_ratio_pct: trackingRatio,

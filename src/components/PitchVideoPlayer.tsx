@@ -1,5 +1,5 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { Play, Pause, RotateCcw, Video, SkipBack, SkipForward, Pin, Target, Maximize2, Minimize2, CheckCircle2 } from 'lucide-react';
+import { Play, Pause, RotateCcw, Video, SkipBack, SkipForward, Pin, Target, CheckCircle2 } from 'lucide-react';
 import { CameraViewMode } from './PitchVisualizer';
 import { SpatialCalibrationInfo } from '../types';
 
@@ -15,13 +15,12 @@ interface PitchVideoPlayerProps {
   velocityKmh?: number;
   pitchName?: string;
   hasAnalyzed?: boolean;
+  busy?: boolean;
   onCurrentFrameChange?: (frame: number) => void;
   targetFrameSeek?: number | null;
   onSetReleaseFrame?: (frame: number) => void;
   onSetGloveFrame?: (frame: number) => void;
   spatialCalibration?: SpatialCalibrationInfo;
-  isExpanded?: boolean;
-  onToggleExpand?: () => void;
   onVideoElementReady?: (el: HTMLVideoElement | null) => void;
   isSelectingPoint?: 1 | 2 | null;
   onSelectCoordinate?: (xNorm: number, yNorm: number) => void;
@@ -40,12 +39,11 @@ export const PitchVideoPlayer: React.FC<PitchVideoPlayerProps> = ({
   viewMode,
   velocityKmh = 0,
   hasAnalyzed = false,
+  busy = false,
   onCurrentFrameChange,
   targetFrameSeek,
   onSetReleaseFrame,
   onSetGloveFrame,
-  isExpanded = false,
-  onToggleExpand,
   onVideoElementReady,
   isSelectingPoint = null,
   onSelectCoordinate,
@@ -57,11 +55,12 @@ export const PitchVideoPlayer: React.FC<PitchVideoPlayerProps> = ({
   const [currentFrame, setCurrentFrame] = useState<number>(releaseFrame || 0);
   const [isMetadataReady, setIsMetadataReady] = useState<boolean>(false);
 
+  const markerPosition=(x:number,y:number)=>{const v=videoRef.current,rect=v?.parentElement?.getBoundingClientRect();if(!v||!rect||!v.videoWidth)return{left:`${x*100}%`,top:`${y*100}%`};const scale=Math.min(rect.width/v.videoWidth,rect.height/v.videoHeight),w=v.videoWidth*scale,h=v.videoHeight*scale;return{left:`${((rect.width-w)/2+x*w)/rect.width*100}%`,top:`${((rect.height-h)/2+y*h)/rect.height*100}%`};};
   // Helper: frame -> timestamp (優先使用 timestamps[]，否則使用 frame / fps)
   const frameToTimeSec = (frameIdx: number): number => {
     const safeFps = fps > 0 ? fps : 30;
     if (timestamps && timestamps.length > frameIdx && timestamps[frameIdx] !== undefined) {
-      return timestamps[frameIdx];
+      return timestamps[frameIdx] + Math.min(0.0005, ((timestamps[frameIdx + 1] ?? timestamps[frameIdx] + 1/safeFps) - timestamps[frameIdx])/8);
     }
     return Math.max(0, frameIdx / safeFps);
   };
@@ -70,16 +69,9 @@ export const PitchVideoPlayer: React.FC<PitchVideoPlayerProps> = ({
   const timeSecToFrame = (timeSec: number): number => {
     const safeFps = fps > 0 ? fps : 30;
     if (timestamps && timestamps.length > 0) {
-      let bestIdx = 0;
-      let minDiff = Infinity;
-      for (let i = 0; i < timestamps.length; i++) {
-        const d = Math.abs(timestamps[i] - timeSec);
-        if (d < minDiff) {
-          minDiff = d;
-          bestIdx = i;
-        }
-      }
-      return bestIdx;
+      let lo=0,hi=timestamps.length-1;
+      while(lo<hi){const mid=Math.ceil((lo+hi)/2);if(timestamps[mid]<=timeSec+1e-6)lo=mid;else hi=mid-1;}
+      return lo;
     }
     return Math.round(timeSec * safeFps);
   };
@@ -159,7 +151,7 @@ export const PitchVideoPlayer: React.FC<PitchVideoPlayerProps> = ({
   };
 
   const togglePlay = () => {
-    if (!videoRef.current) return;
+    if (!videoRef.current || busy) return;
     if (isPlaying) {
       videoRef.current.pause();
       setIsPlaying(false);
@@ -174,12 +166,12 @@ export const PitchVideoPlayer: React.FC<PitchVideoPlayerProps> = ({
 
   // Step exact frames forward or backward
   const stepFrame = (delta: number) => {
-    if (!videoRef.current) return;
+    if (!videoRef.current || busy) return;
     if (isPlaying) {
       videoRef.current.pause();
       setIsPlaying(false);
     }
-    const maxF = totalFrames > 0 ? totalFrames : 500;
+    const maxF = totalFrames > 0 ? totalFrames - 1 : 0;
     const nextFrame = Math.max(0, Math.min(currentFrame + delta, maxF));
     setCurrentFrame(nextFrame);
     videoRef.current.currentTime = frameToTimeSec(nextFrame);
@@ -189,8 +181,8 @@ export const PitchVideoPlayer: React.FC<PitchVideoPlayerProps> = ({
   };
 
   const seekToFrame = (targetFrame: number) => {
-    if (!videoRef.current) return;
-    const maxF = totalFrames > 0 ? totalFrames : 500;
+    if (!videoRef.current || busy) return;
+    const maxF = totalFrames > 0 ? totalFrames - 1 : 0;
     const safeTarget = Math.max(0, Math.min(targetFrame, maxF));
     setCurrentFrame(safeTarget);
     videoRef.current.currentTime = frameToTimeSec(safeTarget);
@@ -211,6 +203,7 @@ export const PitchVideoPlayer: React.FC<PitchVideoPlayerProps> = ({
   // Keyboard controls for fine frame inspection
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if(busy)return;
       // Don't trigger if user is typing in an input
       if (['INPUT', 'SELECT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) {
         return;
@@ -234,7 +227,7 @@ export const PitchVideoPlayer: React.FC<PitchVideoPlayerProps> = ({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [currentFrame, isPlaying, totalFrames, onSetReleaseFrame, onSetGloveFrame]);
+  }, [currentFrame, isPlaying, totalFrames, onSetReleaseFrame, onSetGloveFrame,busy]);
 
   const isIntervalValid = gloveFrame > releaseFrame;
 
@@ -242,9 +235,7 @@ export const PitchVideoPlayer: React.FC<PitchVideoPlayerProps> = ({
     <div className="space-y-3">
       {/* 乾淨無遮擋、高解析特大尺寸影片播放視窗 */}
       <div 
-        className={`video-stage relative w-full rounded-2xl overflow-hidden bg-black border-2 border-slate-700/80 shadow-2xl flex items-center justify-center group transition-all duration-300 ${
-          isExpanded ? 'min-h-[660px] h-[740px]' : 'min-h-[500px] h-[560px] lg:h-[620px]'
-        }`}
+        className={`video-stage relative w-full rounded-2xl overflow-hidden bg-black border-2 border-slate-700/80 shadow-2xl flex items-center justify-center group transition-all duration-300 min-h-[500px] h-[560px] lg:h-[620px]`}
       >
         {/* Real HTML5 Video - 純淨原始畫面，已完全移除覆蓋軌跡，讓使用者清晰檢視每一影格 */}
         {videoUrl ? (
@@ -255,10 +246,14 @@ export const PitchVideoPlayer: React.FC<PitchVideoPlayerProps> = ({
             onClick={(e) => {
               if (!isSelectingPoint || !onSelectCoordinate) return;
               const rect = e.currentTarget.getBoundingClientRect();
-              const clickX = e.clientX - rect.left;
-              const clickY = e.clientY - rect.top;
-              const xNorm = Number((Math.max(0, Math.min(1, clickX / rect.width))).toFixed(4));
-              const yNorm = Number((Math.max(0, Math.min(1, clickY / rect.height))).toFixed(4));
+              const video=videoRef.current;if(!video)return;
+              const scale=Math.min(rect.width/video.videoWidth,rect.height/video.videoHeight);
+              const contentW=video.videoWidth*scale,contentH=video.videoHeight*scale;
+              const clickX=e.clientX-rect.left-(rect.width-contentW)/2;
+              const clickY=e.clientY-rect.top-(rect.height-contentH)/2;
+              if(clickX<0||clickY<0||clickX>contentW||clickY>contentH)return;
+              const xNorm = Number((Math.max(0, Math.min(1, clickX / contentW))).toFixed(4));
+              const yNorm = Number((Math.max(0, Math.min(1, clickY / contentH))).toFixed(4));
               onSelectCoordinate(xNorm, yNorm);
             }}
           >
@@ -271,6 +266,8 @@ export const PitchVideoPlayer: React.FC<PitchVideoPlayerProps> = ({
               onTimeUpdate={handleTimeUpdate}
               onLoadedMetadata={handleVideoLoadedMetadata}
               onEnded={() => setIsPlaying(false)}
+              onPause={()=>setIsPlaying(false)}
+              onPlay={()=>setIsPlaying(true)}
             />
 
             {/* Manual Anchor Point 1 Marker */}
@@ -278,8 +275,7 @@ export const PitchVideoPlayer: React.FC<PitchVideoPlayerProps> = ({
               <div
                 className="absolute pointer-events-none transform -translate-x-1/2 -translate-y-1/2 z-10 transition-transform"
                 style={{
-                  left: `${manualPoint1.x_norm * 100}%`,
-                  top: `${manualPoint1.y_norm * 100}%`
+                  ...markerPosition(manualPoint1.x_norm,manualPoint1.y_norm)
                 }}
               >
                 <div className="w-5 h-5 rounded-full border-2 border-cyan-400 bg-cyan-500/40 animate-ping absolute -inset-0.5" />
@@ -297,8 +293,7 @@ export const PitchVideoPlayer: React.FC<PitchVideoPlayerProps> = ({
               <div
                 className="absolute pointer-events-none transform -translate-x-1/2 -translate-y-1/2 z-10 transition-transform"
                 style={{
-                  left: `${manualPoint2.x_norm * 100}%`,
-                  top: `${manualPoint2.y_norm * 100}%`
+                  ...markerPosition(manualPoint2.x_norm,manualPoint2.y_norm)
                 }}
               >
                 <div className="w-5 h-5 rounded-full border-2 border-amber-400 bg-amber-500/40 animate-ping absolute -inset-0.5" />
@@ -341,25 +336,13 @@ export const PitchVideoPlayer: React.FC<PitchVideoPlayerProps> = ({
 
               {hasAnalyzed && velocityKmh > 0 && isIntervalValid && (
                 <span className="px-2.5 py-1 rounded-lg bg-slate-950/85 backdrop-blur-md border border-cyan-500/50 text-cyan-300 text-xs font-mono font-bold shadow">
-                  初速: {velocityKmh} km/h
+                  平均球速: {velocityKmh} km/h
                 </span>
               )}
             </div>
 
             {/* Right: Expand/Contract Button & Real-time Frame Counter */}
             <div className="flex items-center gap-2">
-              {onToggleExpand && (
-                <button
-                  type="button"
-                  onClick={onToggleExpand}
-                  className="px-2.5 py-1 rounded-lg bg-slate-900/90 hover:bg-slate-800 border border-slate-700 text-slate-300 hover:text-white text-xs font-medium shadow flex items-center gap-1.5 transition-all"
-                  title={isExpanded ? '切換標準大小' : '放大播放視窗 (劇院模式)'}
-                >
-                  {isExpanded ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
-                  <span>{isExpanded ? '標準視窗' : '放大視窗'}</span>
-                </button>
-              )}
-
               {totalFrames > 0 && (
                 <div className="px-3 py-1 rounded-lg bg-slate-950/90 backdrop-blur-md border border-slate-700 text-xs font-mono shadow-md">
                   <span className="text-slate-400">影格: </span>
@@ -390,43 +373,24 @@ export const PitchVideoPlayer: React.FC<PitchVideoPlayerProps> = ({
           </div>
         )}
 
-        {/* Play/Pause Quick Float on Bottom Right */}
-        {videoUrl && (
-          <div className="absolute bottom-3.5 right-3.5 z-20 flex items-center gap-2">
-            <button
-              type="button"
-              onClick={togglePlay}
-              className="p-2.5 rounded-xl bg-blue-600/90 hover:bg-blue-500 text-white shadow-xl backdrop-blur-sm transition-all active:scale-95 flex items-center gap-2 text-xs font-semibold px-4"
-            >
-              {isPlaying ? (
-                <>
-                  <Pause className="w-4 h-4 fill-current" />
-                  <span>暫停</span>
-                </>
-              ) : (
-                <>
-                  <Play className="w-4 h-4 fill-current" />
-                  <span>播放</span>
-                </>
-              )}
-            </button>
-          </div>
-        )}
       </div>
 
       {/* Frame Scrubber and Micro-Navigation Toolbar */}
       {videoUrl && totalFrames > 0 && (
         <div className="bg-[#0b1329]/90 border border-slate-800 rounded-xl p-3 space-y-2.5 text-xs">
+          <button type="button" disabled={busy} onClick={togglePlay} className="px-4 py-2 rounded bg-blue-600 flex gap-2 items-center">{isPlaying?<Pause className="w-4 h-4"/>:<Play className="w-4 h-4"/>}{isPlaying?'暫停':'播放'}</button>
           {/* Timeline Range Slider */}
           <div className="space-y-1">
             <div className="flex items-center justify-between text-xs text-slate-400 font-mono">
-              <span className="text-slate-400 font-medium">影片時間軸逐格巡航 (按住滑桿可平滑檢視每一影格)</span>
+              <span className="text-slate-400 font-medium">影片PTS時間軸（定位仍受瀏覽器解碼限制）</span>
               <span className="text-cyan-400 font-bold">第 {currentFrame} 幀 / 共 {totalFrames} 幀</span>
             </div>
             <input
               type="range"
+              aria-label="影片時間軸"
+              disabled={busy}
               min={0}
-              max={totalFrames}
+              max={Math.max(0,totalFrames-1)}
               value={currentFrame}
               onChange={(e) => seekToFrame(Number(e.target.value))}
               className="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-400 focus:outline-none"
@@ -479,6 +443,7 @@ export const PitchVideoPlayer: React.FC<PitchVideoPlayerProps> = ({
               {onSetReleaseFrame && (
                 <button
                   type="button"
+                  disabled={busy}
                   onClick={() => onSetReleaseFrame(currentFrame)}
                   className="px-3 py-1.5 rounded-lg bg-red-950/80 hover:bg-red-900/90 border border-red-500/50 text-red-200 text-xs font-semibold flex items-center gap-1.5 active:scale-95 transition-all"
                   title="將當前畫面影格設為出手影格"
@@ -491,6 +456,7 @@ export const PitchVideoPlayer: React.FC<PitchVideoPlayerProps> = ({
               {onSetGloveFrame && (
                 <button
                   type="button"
+                  disabled={busy}
                   onClick={() => onSetGloveFrame(currentFrame)}
                   className="px-3 py-1.5 rounded-lg bg-amber-950/80 hover:bg-amber-900/90 border border-amber-500/50 text-amber-200 text-xs font-semibold flex items-center gap-1.5 active:scale-95 transition-all"
                   title="將當前畫面影格設為進手套影格"

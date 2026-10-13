@@ -14,51 +14,15 @@ export class VideoTimingService {
     fileName?: string
   ): Promise<VideoTiming> {
     const durationSec = video.duration && !isNaN(video.duration) ? video.duration : 5;
-    const name = (fileName || '').toLowerCase();
-
-    // 1. 檢測檔名中是否有明確指定的高速攝影幀率標籤
+    // File names never supply timing. Playback cadence is only a fallback estimate.
     let detectedFps: number | null = null;
     let fpsSource: VideoTiming['fpsSource'] = 'estimated';
-
-    if (name.includes('240fps') || name.includes('240-fps')) {
-      detectedFps = 240;
-      fpsSource = 'container_metadata';
-    } else if (name.includes('120fps') || name.includes('120-fps') || name.includes('slo-mo')) {
-      detectedFps = 120;
-      fpsSource = 'container_metadata';
-    } else if (name.includes('60fps') || name.includes('60-fps')) {
-      detectedFps = 60;
-      fpsSource = 'container_metadata';
-    } else if (name.includes('50fps')) {
-      detectedFps = 50;
-      fpsSource = 'container_metadata';
-    } else if (name.includes('30fps') || name.includes('29.97')) {
-      detectedFps = 30;
-      fpsSource = 'container_metadata';
-    } else if (name.includes('24fps') || name.includes('23.976')) {
-      detectedFps = 24;
-      fpsSource = 'container_metadata';
+    if (!video.paused && 'requestVideoFrameCallback' in video) {
+      detectedFps = await this.measureFpsViaRvfc(video);
+      if (detectedFps && detectedFps > 10 && detectedFps <= 250) fpsSource = 'measured_rvfc';
+      else detectedFps = null;
     }
-
-    // 2. 如果支援 requestVideoFrameCallback，嘗試實際量測真實畫面送顯幀率 (RVFC)
-    if (!detectedFps && 'requestVideoFrameCallback' in video) {
-      try {
-        const measuredFps = await this.measureFpsViaRvfc(video);
-        if (measuredFps && measuredFps > 10 && measuredFps <= 250) {
-          detectedFps = measuredFps;
-          fpsSource = 'measured_rvfc';
-        }
-      } catch (err) {
-        console.warn('RVFC timing probe skipped:', err);
-      }
-    }
-
-    // 3. Fallback: 手機隨手拍標準預設為 30 FPS
-    if (!detectedFps) {
-      detectedFps = 30;
-      fpsSource = 'estimated';
-    }
-
+    if (!detectedFps) detectedFps = 30;
     const totalFrames = Math.max(15, Math.round(durationSec * detectedFps));
     const timestamps: number[] = [];
     const frameDt = 1.0 / detectedFps;
@@ -67,7 +31,10 @@ export class VideoTimingService {
     }
 
     return {
-      actualFps: Number(detectedFps.toFixed(2)),
+      actualFps: detectedFps,
+      timingReliable: false,
+      seekPrecision: 'estimated',
+      timingWarning: '無可用容器PTS：此時間軸為估計，請指定可信FPS；未確認前禁止自動事件與物理分析。',
       fpsSource,
       totalFrames,
       durationSec: Number(durationSec.toFixed(3)),
@@ -146,17 +113,13 @@ export class VideoTimingService {
 
     // 非同步定位至精確時間點
     if (Math.abs(video.currentTime - targetTimestamp) > 0.004) {
-      video.currentTime = Math.max(0, Math.min(video.duration || 100, targetTimestamp));
-      await new Promise<void>((resolve) => {
-        const onSeeked = () => {
-          video.removeEventListener('seeked', onSeeked);
-          resolve();
-        };
-        video.addEventListener('seeked', onSeeked);
-        setTimeout(() => {
-          video.removeEventListener('seeked', onSeeked);
-          resolve();
-        }, 160); // timeout guard
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => { cleanup(); reject(new Error('影格定位逾時，未使用舊影像冒充指定影格')); }, 3000);
+        const cleanup = () => { clearTimeout(timer); video.removeEventListener('seeked', done); video.removeEventListener('error', fail); };
+        const done = () => { cleanup(); resolve(); };
+        const fail = () => { cleanup(); reject(new Error('影片解碼失敗')); };
+        video.addEventListener('seeked', done); video.addEventListener('error', fail);
+        video.currentTime = Math.max(0, Math.min(video.duration || 100, targetTimestamp + 0.0005));
       });
     }
 

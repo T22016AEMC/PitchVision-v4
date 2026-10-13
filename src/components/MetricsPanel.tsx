@@ -3,6 +3,7 @@ import { MatchResult } from '../types';
 import { Gauge, Compass, Activity, Zap, TrendingUp, HelpCircle, CheckCircle2, GitFork, ShieldCheck, AlertTriangle } from 'lucide-react';
 
 interface MetricsPanelProps {
+  compact?: boolean;
   result?: MatchResult;
   matchedResult?: MatchResult;
   calcVelocity?: number;
@@ -12,6 +13,7 @@ interface MetricsPanelProps {
 }
 
 export const MetricsPanel: React.FC<MetricsPanelProps> = ({
+  compact=false,
   result,
   matchedResult,
   standardDistance = 17.5
@@ -36,7 +38,7 @@ export const MetricsPanel: React.FC<MetricsPanelProps> = ({
           <div className="font-semibold text-cyan-300">📋 投球數據分析流程：</div>
           <div>1. 於左側上傳投球影片（支援 24/30/60/120+ FPS，系統自動探測真實幀率與時間戳）</div>
           <div>2. 使用「AI 自動搜尋出手 / 進手套」或自主設定【出手影格】與【進手套影格】</div>
-          <div>3. 系統執行【Perspective / Scale Calibrated Estimate】解算實測球速與位移 (IVB / HB)</div>
+          <div>3. 系統依時間、距離與可用幾何約束分析；尺度不足時保留模型參考，不能視為實測位移。</div>
           <div>4. 於同球種【Synthetic Physics Reference Dataset】反查 RPM 與 Spin Axis 並執行物理重建閉環驗證</div>
         </div>
       </div>
@@ -63,7 +65,9 @@ export const MetricsPanel: React.FC<MetricsPanelProps> = ({
   const clockDeg = ((spin_axis_decimal % 12) / 12) * 360;
 
   return (
-    <div id="metrics-panel-root" className="space-y-4">
+    <div id={compact?"metrics-panel-root":"science-metrics-root"} className={`space-y-4 ${compact?"metrics-compact":""}`}>
+      {activeResult.observed_metrics&&!activeResult.observed_metrics.movement_valid&&<div className="p-3 rounded border border-amber-600 text-xs text-amber-200">幾何／追蹤未充分約束：下方位移與旋轉為原模型參考，並非精確量測。原始未截限 IVB {activeResult.observed_metrics.raw_ivb_inch?.toFixed(1)} / HB {activeResult.observed_metrics.raw_hb_inch?.toFixed(1)} 吋；顯示值若受限不得視為實測。{activeResult.observed_metrics.movement_limitation}</div>}
+      <div className="science-detail">
       {/* 核心架構橫幅：嚴格遵循三類資料分流 */}
       <div className="bg-gradient-to-r from-blue-950/80 via-slate-900 to-indigo-950/80 border border-blue-500/30 rounded-xl p-3 text-xs space-y-1.5 shadow-sm">
         <div className="flex items-center justify-between">
@@ -78,6 +82,8 @@ export const MetricsPanel: React.FC<MetricsPanelProps> = ({
         <p className="text-[11px] text-slate-400 leading-relaxed">
           {activeResult.calibration_notes || '以 PitchVision Synthetic Physics Reference Dataset (1,080 筆) 為基準，分離影片實測證據與物理模型推估。'}
         </p>
+      </div>
+
       </div>
 
       {/* 軌跡狀態警示：若實測點不足，明確標示 INSUFFICIENT EVIDENCE，禁止偽造直連 */}
@@ -145,6 +151,7 @@ export const MetricsPanel: React.FC<MetricsPanelProps> = ({
         </div>
       </div>
 
+      <div className="science-detail">
       {/* 資料來源透明化三柱對照卡 (Evidence vs Prior vs Inference) */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-3 text-xs space-y-2.5 shadow-sm">
         <div className="flex items-center justify-between text-[11px] text-slate-400 font-semibold">
@@ -163,13 +170,13 @@ export const MetricsPanel: React.FC<MetricsPanelProps> = ({
           <div className="bg-slate-950/80 border border-emerald-500/30 rounded-lg p-2 space-y-1">
             <div className="text-emerald-400 font-bold flex items-center gap-1">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-              A. VIDEO EVIDENCE
+              A. {activeResult.observed_metrics?.movement_valid?'CONDITIONED VIDEO EVIDENCE':'TIME / LEGACY PRIOR'}
             </div>
             <div className="text-[10px] text-slate-300">
               • 球速: <span className="text-white font-bold">{estimated_velocity_kmh} km/h</span>
             </div>
             <div className="text-[10px] text-slate-400">
-              • 觀測位移: IVB {ivbSign}{ivb_inch}" / HB {hbSign}{hb_inch}"
+              • {activeResult.observed_metrics?.movement_valid?'條件重建位移':'先驗位移參考'}: IVB {ivbSign}{ivb_inch}" / HB {hbSign}{hb_inch}"
             </div>
           </div>
 
@@ -203,6 +210,8 @@ export const MetricsPanel: React.FC<MetricsPanelProps> = ({
         </div>
       </div>
 
+      </div>
+
       {/* The 5 Core Metrics */}
       <div className="grid grid-cols-1 gap-3">
         {/* Metric 1: Velocity */}
@@ -210,14 +219,14 @@ export const MetricsPanel: React.FC<MetricsPanelProps> = ({
           <div className="flex items-center justify-between text-xs text-slate-400 font-semibold mb-1">
             <span className="flex items-center gap-1.5">
               <Gauge className="w-4 h-4 text-emerald-400" />
-              1. 實測球速 (Velocity)
+              1. 平均球速 (Distance / Time)
             </span>
             <div className="flex items-center gap-1.5">
               <span className="text-[9.5px] font-mono uppercase bg-emerald-950/80 text-emerald-300 border border-emerald-500/40 px-1.5 py-0.5 rounded font-bold">
                 {activeResult.source_velocity || 'VIDEO DERIVED'}
               </span>
               <span className="text-[10px] bg-blue-950/80 text-blue-300 border border-blue-500/30 px-1.5 py-0.5 rounded font-mono">
-                {activeResult.standard_distance_m || standardDistance}m 實測飛行
+                {activeResult.standard_distance_m || standardDistance}m {activeResult.observed_metrics?.movement_valid ? '幾何條件距離' : '先驗估算距離'}
               </span>
             </div>
           </div>
@@ -262,7 +271,7 @@ export const MetricsPanel: React.FC<MetricsPanelProps> = ({
             <span className="text-base font-medium text-slate-400">RPM</span>
             {activeResult.uncertainty && (
               <span className="text-xs font-mono text-purple-300 bg-purple-950/50 px-2 py-0.5 rounded border border-purple-500/30">
-                ±{activeResult.uncertainty.spin_rate_plus_minus_rpm} RPM (不確定度區間)
+                {activeResult.uncertainty.spin_rate_range}（模型敏感度／先驗，非實測信賴區間）
               </span>
             )}
           </div>
@@ -392,6 +401,7 @@ export const MetricsPanel: React.FC<MetricsPanelProps> = ({
         </div>
       </div>
 
+      <div className="science-detail">
       {/* 前向閉環驗證 (Forward Validation: VIDEO TRACK vs MODEL TRACK) */}
       {activeResult.trajectory_fit && (
         <div id="forward-validation-card" className="bg-slate-900/90 border border-indigo-500/40 rounded-xl p-3.5 text-xs space-y-2.5 shadow-sm">
@@ -415,13 +425,13 @@ export const MetricsPanel: React.FC<MetricsPanelProps> = ({
             <div className="bg-slate-950/80 p-2 rounded-lg border border-slate-800">
               <div className="text-slate-400 text-[10px]">軌跡均方根誤差 (RMSE)</div>
               <div className="text-indigo-300 font-bold font-mono text-sm">
-                {activeResult.trajectory_fit.rmse_px} px
+                {activeResult.trajectory_fit.fit_quality === 'NOT_VALIDATED' ? '未驗證' : `${activeResult.trajectory_fit.rmse_px} px`}
               </div>
             </div>
             <div className="bg-slate-950/80 p-2 rounded-lg border border-slate-800">
               <div className="text-slate-400 text-[10px]">最大單幀偏差</div>
               <div className="text-amber-300 font-bold font-mono text-sm">
-                {activeResult.trajectory_fit.max_deviation_px} px
+                {activeResult.trajectory_fit.fit_quality === 'NOT_VALIDATED' ? '未驗證' : `${activeResult.trajectory_fit.max_deviation_px} px`}
               </div>
             </div>
             <div className="bg-slate-950/80 p-2 rounded-lg border border-slate-800">
@@ -438,6 +448,9 @@ export const MetricsPanel: React.FC<MetricsPanelProps> = ({
         </div>
       )}
 
+      </div>
+
+      <div className="science-detail">
       {/* Analysis Basis (分析依據與來源透明總表) */}
       {activeResult.analysis_basis && (
         <div id="analysis-basis-card" className="bg-slate-900/90 border border-slate-800 rounded-xl p-3.5 text-xs space-y-2.5 shadow-sm">
@@ -475,6 +488,8 @@ export const MetricsPanel: React.FC<MetricsPanelProps> = ({
           </div>
         </div>
       )}
+
+      </div>
 
       {/* VIDEO TRACK (實測手機影像軌跡) 指標區塊 */}
       {activeResult.video_metrics && (
@@ -527,7 +542,7 @@ export const MetricsPanel: React.FC<MetricsPanelProps> = ({
             <div className="bg-slate-950/80 p-2 rounded-lg border border-slate-800">
               <div className="text-slate-400 text-[10px]">雙向協商一致性</div>
               <div className="text-emerald-300 font-bold font-mono text-sm">
-                {activeResult.video_metrics.forward_backward_agreement_pct ?? 75}%
+                {activeResult.video_metrics.forward_backward_agreement_pct !== undefined ? `${activeResult.video_metrics.forward_backward_agreement_pct}%` : '未獨立量測'}
               </div>
               <div className="text-[10px] text-slate-500">
                 雙向追蹤重合度
@@ -590,6 +605,7 @@ export const MetricsPanel: React.FC<MetricsPanelProps> = ({
         </div>
       )}
 
+      <div className="science-detail">
       {/* Top N Database Match Candidates (with Interpolation Weights & Physics Consistency) */}
       {activeResult.top_candidates && activeResult.top_candidates.length > 0 && (
         <div id="top-candidates-panel" className="bg-slate-900/90 border border-slate-800 rounded-xl p-3 text-xs space-y-2 shadow-sm">
@@ -654,6 +670,9 @@ export const MetricsPanel: React.FC<MetricsPanelProps> = ({
         </div>
       )}
 
+      </div>
+
+      <div className="science-detail">
       {/* Answer Why: 運動科學球路物理分析解讀 */}
       <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-3.5 space-y-2 text-xs text-slate-300">
         <div className="font-semibold text-white flex items-center gap-1.5 text-xs">
@@ -682,6 +701,8 @@ export const MetricsPanel: React.FC<MetricsPanelProps> = ({
           </ul>
         )}
       </div>
+      </div>
+
     </div>
   );
 };

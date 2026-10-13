@@ -37,7 +37,7 @@ export const VideoQualityCard: React.FC<VideoQualityCardProps> = ({
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]">
         <div className="bg-slate-950/70 p-2 rounded-lg border border-slate-800/80">
-          <div className="text-[10px] text-slate-400">真實幀率 (actualFPS)</div>
+          <div className="text-[10px] text-slate-400">時間表幀率 (actualFPS)</div>
           <div className={`font-mono font-bold text-sm ${isLowFps ? 'text-amber-400' : 'text-cyan-400'}`}>
             {actualFps} FPS
           </div>
@@ -69,7 +69,7 @@ export const VideoQualityCard: React.FC<VideoQualityCardProps> = ({
           }`}>
             {assessment.motionBlurRisk}
           </div>
-          <div className="text-[9.5px] text-slate-500">高速位移模糊</div>
+          <div className="text-[9.5px] text-slate-500">FPS先驗風險，非曝光量測</div>
         </div>
 
         <div className="bg-slate-950/70 p-2 rounded-lg border border-slate-800/80">

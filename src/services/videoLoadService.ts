@@ -1,3 +1,4 @@
+import { readMp4Timing } from './mp4Timing';
 import { VideoTiming } from '../types';
 import { VideoTimingService } from './videoTimingService';
 import { VideoMetadataService, VideoQualityAssessment } from './videoMetadataService';
@@ -5,6 +6,7 @@ import { VideoMetadataService, VideoQualityAssessment } from './videoMetadataSer
 export type VideoLoadStatus = 'idle' | 'uploading' | 'processing_metadata' | 'ready' | 'failed';
 
 export interface LoadedVideoSession {
+  timing: VideoTiming;
   objectUrl: string;
   fileName: string;
   mimeType: string;
@@ -143,10 +145,20 @@ export class VideoLoadService {
         : 5.0;
 
     // 4. 探測真實 FPS 與時間戳
-    const timing = await VideoTimingService.probeVideoTiming(probeVideo, file.name);
+    let timing: VideoTiming;
+    try {
+      timing = await readMp4Timing(file) || await VideoTimingService.probeVideoTiming(probeVideo);
+      if (timing.timingReliable && Math.abs(timing.durationSec - durationSec) > Math.max(0.15, durationSec * 0.05)) {
+        timing.timingReliable = false;
+        timing.timingWarning = '容器PTS與播放器時長不一致，請人工確認時間。';
+      }
+    } catch (error) {
+      timing = await VideoTimingService.probeVideoTiming(probeVideo);
+      timing.timingWarning = (error instanceof Error ? error.message : '時間表解析失敗') + '；請指定可信FPS。';
+    }
     const actualFps = timing.actualFps;
     const isFpsEstimated = timing.fpsSource === 'estimated';
-    const totalFrames = Math.max(15, timing.totalFrames || Math.round(durationSec * actualFps));
+    const totalFrames = timing.totalFrames;
 
     // 5. 評估影片品質
     const qualityAssessment = VideoMetadataService.assessVideoQuality(
@@ -177,6 +189,7 @@ export class VideoLoadService {
     onStatusChange?.('ready', `影片載入完成 (${width}x${height} @ ${actualFps} FPS)`);
 
     return {
+      timing,
       objectUrl,
       fileName: file.name,
       mimeType: file.type || 'video/mp4',

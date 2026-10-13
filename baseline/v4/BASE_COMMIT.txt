@@ -1,0 +1,3 @@
+Frozen pre-upgrade source: b41c3122e26762ccea61c7e1f78f9cfae7b887ce
+src is copied from V4 before V4.1 edits; other original resources/configuration are copied from baseline/v3 for the historical migration assertions.
+Do not edit this snapshot to make tests pass. Full V4 source/configuration remain available at the Git commit above.

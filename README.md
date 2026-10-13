@@ -1,6 +1,6 @@
-# PitchVision V4 Baseline
+# PitchVision V4.1
 
-以原始 PitchVision_V3.zip 為唯一基準，保留科學引擎與兩份資料庫，調整手機介面及資源生命週期。
+在既有 V4 Baseline 上改善影片時間、追蹤證據、條件式幾何／物理反演與操作排列；保留兩份原始資料庫、原手動旋轉模型與部署架構。科學能力仍有未通過項目，見 V41_ACCEPTANCE.md。
 
 ## 開發與驗證
 
@@ -14,18 +14,25 @@ pnpm run build
 pnpm run dev
 ```
 
-`verify` 執行 TypeScript、原檔保留、資料庫 SHA-256 與 256 組 V3/V4 全輸出相等測試。`baseline/v3` 是原碼快照，禁止跟隨 V4 修改。
+`verify` 執行 TypeScript、資料庫 SHA-256、凍結 V3/V4 的 256 組歷史全輸出相等測試，及 V4.1 時間／幾何／物理／手動旋轉回歸測試。`baseline/v3` 保留原碼；`baseline/v4/src` 保留升級前 source（b41c312），其其他檔案沿用 V3 資源與設定。V4.1 的必要修正不宣稱與 V3 全輸出相等。
 
 ## 真實影片驗收
 
-安裝 Chrome，將「直球.mp4」「彈指曲球.mp4」放在上層 `test videos`。本機先啟動 `pnpm exec vite --port 4173`，執行 `pnpm run test:e2e`。公開版 PowerShell 範例：
+安裝 Chrome，將兩部影片放在上層 `test videos`。先執行 `pnpm run verify` 生成测试用 bundle，然後 `pnpm run build`、`pnpm exec vite preview --port 4175`。在忽略的 `test-results/v41-manual-selections.json` 記錄人工檢視後選取的影片時間，格式為 `{ "basis": "人工選取依據與限制", "影片完整檔名": { "releaseTime": 秒數, "gloveTime": 秒數 } }`。此檔只控制正常手動 UI，不提供預期分析答案。接球不可確認時須明確註記，不作精度真值。
+
+```powershell
+$env:BASE_URL='http://127.0.0.1:4175'
+pnpm run test:e2e
+```
+
+公開版 PowerShell 範例：
 
 ```powershell
 $env:BASE_URL='https://YOUR-SITE.onrender.com'
 pnpm run test:e2e
 ```
 
-可以設定 TEST_VIDEO_DIR 及 CHROMIUM_PATH。測試僅透過正常檔案選擇器將影片交给瀏覽器本地處理；影片和包含其畫面的 test-results 不提交、不部署。輸出在 `test-results/local` 或 `test-results/public`。桌面觸控模擬不代表實機測試。
+V4.1 測試僅透過正常檔案選擇器將影片交给瀏覽器本地處理；影片、人工選取檔與包含其畫面的 test-results 不提交、不部署。輸出在 `test-results/v41-local` 或 `test-results/v41-public`。桌面觸控模擬不代表實機測試。原 V4 瀏覽器測試保留於 tests/browser.mjs 與 tests/browser-v4.mjs；其舊 UI 定位需用 V4 版本執行。
 
 ## 更新與部署
 

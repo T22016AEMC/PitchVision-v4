@@ -1,9 +1,13 @@
-import { BallCandidate, BallObservation, CameraViewMode } from '../types';
+import { assessTrackEvidence } from './trackEvidence';
+import { linkBallCandidateChains } from './candidateChains';
+import { motionForeground } from './motionForeground';
+import { BallCandidate, BallObservation, CameraViewMode, ManualAnchorInput } from '../types';
 import { BallDetectionEngine } from './ballDetectionEngine';
 import { extractMotionCandidates } from '../motionDetector';
 import { VideoTimingService } from './videoTimingService';
 
 export interface AutoFrameDetectionInput {
+  manualAnchor?: ManualAnchorInput;
   videoElement: HTMLVideoElement;
   actualFps: number;
   totalFrames: number;
@@ -44,6 +48,7 @@ export interface AutoFrameDetectionOutput {
 }
 
 interface ScannedFrameSummary {
+  globalMotion: number;
   frame: number;
   timestamp: number;
   topCandidate: BallCandidate | null;
@@ -96,6 +101,7 @@ export class AutoFrameDetectionEngine {
     canvas.height = workH;
 
     const detector = new BallDetectionEngine({
+      manualAnchor: input.manualAnchor,
       width: workW,
       height: workH,
       cameraView
@@ -105,8 +111,8 @@ export class AutoFrameDetectionEngine {
     // 第一階段：Coarse Scan (每 2~4 幀粗掃描，定位投球運動活躍區間)
     // =========================================================================
     const coarseStep = totalFrames > 180 ? 4 : totalFrames > 80 ? 3 : 2;
-    const scanStartFrame = Math.max(1, Math.floor(totalFrames * 0.05));
-    const scanEndFrame = Math.min(totalFrames - 2, Math.ceil(totalFrames * 0.95));
+    const scanStartFrame = 0;
+    const scanEndFrame = totalFrames - 1;
 
     const coarseFrames: number[] = [];
     for (let f = scanStartFrame; f <= scanEndFrame; f += coarseStep) {
@@ -158,6 +164,7 @@ export class AutoFrameDetectionEngine {
           : topCandidate?.components.motionScore || 0;
 
       coarseSummaries.push({
+        globalMotion: motionForeground(decoded.imageData,prevImageData).energy/coarseStep,
         frame: f,
         timestamp: decoded.timestamp,
         topCandidate,
@@ -187,6 +194,8 @@ export class AutoFrameDetectionEngine {
     // 第二階段：Fine Scan (在鎖定區間內逐幀或每 1~2 幀精細掃描)
     // =========================================================================
     const fineStep = safeFps >= 120 ? 2 : 1;
+    activeWindow.startFrame = input.manualAnchor?.point1 ? Math.max(0,Math.min(input.manualAnchor.point1.frame,input.manualAnchor.point2?.frame??totalFrames-1)-2) : 0;
+    activeWindow.endFrame = input.manualAnchor?.point2 ? Math.min(totalFrames-1,Math.max(input.manualAnchor.point1?.frame??0,input.manualAnchor.point2.frame)+2) : totalFrames-1;
     const fineFrames: number[] = [];
     for (let f = activeWindow.startFrame; f <= activeWindow.endFrame; f += fineStep) {
       fineFrames.push(f);
@@ -194,6 +203,10 @@ export class AutoFrameDetectionEngine {
 
     onProgress?.(45, `【階段 3/5】於鎖定區間 (F${activeWindow.startFrame}~F${activeWindow.endFrame}) 執行逐幀精細掃描...`);
 
+    const energies=coarseSummaries.map(s=>s.globalMotion).sort((a,b)=>a-b);
+    const median=energies[Math.floor(energies.length/2)]||0;
+    const deviations=energies.map(v=>Math.abs(v-median)).sort((a,b)=>a-b);
+    const motionThreshold=median+2*(deviations[Math.floor(deviations.length/2)]||0);
     const fineObservations: BallObservation[] = [];
     const candidateFrames: number[] = [];
     prevImageData = null;
@@ -215,13 +228,14 @@ export class AutoFrameDetectionEngine {
         f,
         decoded.timestamp,
         fullRoi,
-        priorPos
+        null
       );
 
+      const activeMotion=motionForeground(decoded.imageData,prevImageData).energy>=motionThreshold;
       prevImageData = decoded.imageData;
 
-      if (cands.length > 0 && cands[0].score >= 0.46) {
-        const best = cands[0];
+      if (activeMotion && cands.length > 0 && cands[0].score >= 0.62 && cands[0].components.motionScore >= 0.35) {
+        for(const best of cands.filter(c=>c.score>=0.62&&c.components.motionScore>=0.35)){
         candidateFrames.push(f);
         fineObservations.push({
           frame: f,
@@ -236,6 +250,7 @@ export class AutoFrameDetectionEngine {
           motion_score: best.components.motionScore
         });
         priorPos = { x: best.x, y: best.y };
+        }
       }
     }
 
@@ -244,12 +259,12 @@ export class AutoFrameDetectionEngine {
     // =========================================================================
     onProgress?.(85, '【階段 4/5】分析球路空間連續性，判定出手影格與進手套影格...');
 
-    const continuousSegment = this.extractBestContinuousBallSegment(fineObservations, safeFps, cameraView);
+    const continuousSegment = linkBallCandidateChains(fineObservations, safeFps);
 
-    if (continuousSegment.length < 3) {
-      warnings.push(`精細掃描僅獲得 ${continuousSegment.length} 個連續棒球觀測點 (需 >= 3 點)。`);
+    if (continuousSegment.length < 6 || !assessTrackEvidence(continuousSegment,safeFps).valid) {
+      warnings.push(`精細掃描僅獲得 ${continuousSegment.length} 個連續候選觀測點 (事件配對需 >= 6 點)。`);
       return this.buildFailedResult(
-        '自動偵測證據不足，請手動確認影格 (未找到 >= 3 個具方向一致性的連續棒球觀測點)。',
+        '事件配對證據不足：需至少6個通過時空/外觀/殘差閘門的觀測；保留候選供人工確認。可在影片下方標記球位置輔助搜尋。',
         warnings,
         candidateFrames
       );
@@ -297,7 +312,7 @@ export class AutoFrameDetectionEngine {
     );
 
     const overallConfidence = Number(
-      Math.max(15, Math.min(95, (releaseScore * 0.5 + gloveScore * 0.5) * 100)).toFixed(1)
+      Math.max(0, Math.min(49, (releaseScore * 0.5 + gloveScore * 0.5) * 100 * assessTrackEvidence(continuousSegment,safeFps).score)).toFixed(1)
     );
 
     onProgress?.(100, `【階段 5/5】AI 視覺偵測完成 (信賴度 ${overallConfidence}%)`);
@@ -308,7 +323,7 @@ export class AutoFrameDetectionEngine {
       return {
         status: 'LOW_CONFIDENCE',
         releaseFrame: firstObs.frame,
-        gloveFrame: Math.max(firstObs.frame + 4, lastObs.frame),
+        gloveFrame: lastObs.frame,
         confidence: overallConfidence,
         method: '電腦視覺兩階段候選偵測 (低信賴度，建議手動微調確認)',
         ballTrack: continuousSegment,
@@ -337,8 +352,10 @@ export class AutoFrameDetectionEngine {
       };
     }
 
-    const status: AutoFrameDetectionOutput['status'] =
-      overallConfidence >= 62 ? 'SUCCESS' : 'LOW_CONFIDENCE';
+    const evidence = assessTrackEvidence(continuousSegment, safeFps);
+    const status: AutoFrameDetectionOutput['status'] = 'LOW_CONFIDENCE';
+    warnings.push('連續候選不等於球離手／進手套證據；需要人工確認。' + evidence.reasons.join('、'));
+    if (!evidence.valid) warnings.push('候選鏈未通過時空速度閘門，不可當作有效球路。');
 
     stepDetails.push(
       `判定出手影格 F${firstObs.frame} (Release Evidence ${(releaseScore * 100).toFixed(0)}%)：偵測到球體自投手釋球區開始穩定連續位移`,

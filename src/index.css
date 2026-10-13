@@ -2,6 +2,7 @@
 
 /* V4: layout only; scientific engines and chart coordinates stay unchanged. */
 :root { color-scheme: dark; }
+.metrics-compact .science-detail { display: none; }
 * { box-sizing: border-box; }
 html { scroll-behavior: smooth; }
 body { margin: 0; min-width: 320px; }

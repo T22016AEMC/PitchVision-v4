@@ -1,3 +1,7 @@
+import { VideoTimingService } from './services/videoTimingService';
+import { isCompactBrightRegion } from './services/compactBallAppearance';
+import { motionForeground } from './services/motionForeground';
+import { assessTrackEvidence } from './services/trackEvidence';
 import { BallObservation, ManualAnchorInput } from './types';
 import { extractMotionCandidates } from './motionDetector';
 
@@ -6,6 +10,7 @@ export interface SparseTrackingOptions {
   visibleEndFrame?: number;
   catchFrame?: number | null;
   fps: number;
+  timestamps?: number[];
   cameraView: 'catcher' | 'pitcher_rear';
   manualAnchor?: ManualAnchorInput;
   onProgress?: (progressPct: number, currentFrame: number, stageText: string) => void;
@@ -20,34 +25,10 @@ export interface SparseTrackingResult {
   statusMessage: string;
 }
 
-function captureFrameCanvas(
-  video: HTMLVideoElement,
-  canvas: HTMLCanvasElement,
-  ctx: CanvasRenderingContext2D,
-  frame: number,
-  timeSec: number
-): Promise<{ frame: number; width: number; height: number; data: Uint8ClampedArray } | null> {
-  return new Promise((resolve) => {
-    const onSeeked = () => {
-      video.removeEventListener('seeked', onSeeked);
-      try {
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        resolve({
-          frame,
-          width: canvas.width,
-          height: canvas.height,
-          data: imgData.data
-        });
-      } catch {
-        resolve(null);
-      }
-    };
-
-    video.addEventListener('seeked', onSeeked);
-    const safeTime = Math.max(0, Math.min(video.duration || 100, timeSec));
-    video.currentTime = safeTime;
-  });
+async function captureFrameCanvas(video:HTMLVideoElement,canvas:HTMLCanvasElement,_ctx:CanvasRenderingContext2D,frame:number,timeSec:number) {
+ const decoded=await VideoTimingService.seekAndCaptureFrame(video,frame,1,canvas,timeSec);
+ if(!decoded.imageData)return null;
+ return {frame,width:canvas.width,height:canvas.height,data:decoded.imageData.data};
 }
 
 /**
@@ -68,17 +49,21 @@ export async function trackBaseballSparse(
     fps,
     cameraView,
     manualAnchor,
+    timestamps,
     onProgress
   } = options;
 
-  const w = videoElement.videoWidth || 720;
-  const h = videoElement.videoHeight || 1280;
+  const nativeW = videoElement.videoWidth || 720;
+  const nativeH = videoElement.videoHeight || 1280;
 
   // 掃描終點影格（不猜測，最高約 0.8 秒飛行上限）
   const maxScanSec = 0.8;
   const maxScanFrames = Math.round(fps * maxScanSec);
   const searchEndFrame = inputEndFrame || (catchFrame ? catchFrame : Math.min(Math.round((videoElement.duration || 6) * fps), releaseFrame + maxScanFrames));
   const totalScanFrames = Math.max(1, searchEndFrame - releaseFrame + 1);
+  const scale=Math.min(1,Math.sqrt(96*1024*1024/(totalScanFrames*nativeW*nativeH*4)));
+  const w=Math.max(1,Math.floor(nativeW*scale)),h=Math.max(1,Math.floor(nativeH*scale));
+  if(scale<1)onProgress?.(0,releaseFrame,`影格快取限制96MiB，分析尺寸${w}×${h}；顯示影片尺寸不變`);
 
   const canvas = document.createElement('canvas');
   canvas.width = w;
@@ -104,7 +89,7 @@ export async function trackBaseballSparse(
     if (onProgress) onProgress(pct, f, `讀取影格 (F${f} @ ${fps}FPS)...`);
 
     // 使用 actual timestamp: f / fps
-    const frameData = await captureFrameCanvas(videoElement, canvas, ctx, f, f / fps);
+    const frameData = await captureFrameCanvas(videoElement, canvas, ctx, f, timestamps?.[f] ?? f / fps);
     frameBuffers.push(frameData);
   }
 
@@ -142,7 +127,16 @@ export async function trackBaseballSparse(
     const prev = i > 0 ? frameBuffers[i - 1] : null;
     const next = i < frameBuffers.length - 1 ? frameBuffers[i + 1] : null;
 
-    const cands = extractMotionCandidates(curr, prev, next, corridorOption);
+    const movingBody=motionForeground(curr,prev).bounds;
+    const cands = extractMotionCandidates(curr, prev, next, corridorOption).filter(c => {
+      if(movingBody&&c.x_norm>=movingBody.xMin&&c.x_norm<=movingBody.xMax&&c.y_norm>=movingBody.yMin&&c.y_norm<=movingBody.yMax)return false;
+      const x=Math.max(0,Math.min(w-1,c.x)),y=Math.max(0,Math.min(h-1,c.y)),i=(y*w+x)*4;
+      const rgb=[curr.data[i],curr.data[i+1],curr.data[i+2]],brightness=rgb.reduce((a,b)=>a+b,0)/3;
+      if(brightness<120||Math.max(...rgb)-Math.min(...rgb)>55)return false;
+      const radius=Math.max(3,Math.min(12,Math.round(w*0.007)));let surrounding=0;
+      for(const [dx,dy]of [[radius,0],[-radius,0],[0,radius],[0,-radius]]){const j=(Math.max(0,Math.min(h-1,y+dy))*w+Math.max(0,Math.min(w-1,x+dx)))*4;surrounding+=(curr.data[j]+curr.data[j+1]+curr.data[j+2])/3;}
+      return brightness-surrounding/4>12&&isCompactBrightRegion(curr,x,y,radius*2);
+    });
     if (cands.length > 0) {
       candidatesPerFrame.set(curr.frame, cands);
     }
@@ -173,7 +167,7 @@ export async function trackBaseballSparse(
     const seed = bestSeed.cand;
     validObservations.push({
       frame: bestSeed.frame,
-      timestamp: Number((bestSeed.frame / fps).toFixed(4)),
+      timestamp: (timestamps?.[bestSeed.frame] ?? bestSeed.frame / fps),
       x: seed.x,
       y: seed.y,
       x_norm: seed.x_norm,
@@ -224,7 +218,7 @@ export async function trackBaseballSparse(
 
         validObservations.push({
           frame: f,
-          timestamp: Number((f / fps).toFixed(4)),
+          timestamp: (timestamps?.[f] ?? f / fps),
           x: bestMatch.x,
           y: bestMatch.y,
           x_norm: bestMatch.x_norm,
@@ -265,7 +259,7 @@ export async function trackBaseballSparse(
 
         validObservations.unshift({
           frame: f,
-          timestamp: Number((f / fps).toFixed(4)),
+          timestamp: (timestamps?.[f] ?? f / fps),
           x: bestMatch.x,
           y: bestMatch.y,
           x_norm: bestMatch.x_norm,
@@ -281,6 +275,7 @@ export async function trackBaseballSparse(
 
   // 嚴格排序
   validObservations.sort((a, b) => a.frame - b.frame);
+  for(const point of validObservations){point.x=Math.round(point.x_norm*nativeW);point.y=Math.round(point.y_norm*nativeH);point.radius*=nativeW/w;}
 
   // 檢驗真實觀測數量 (最高準則：ACCURACY > COVERAGE，少於 3 點視為證據不足)
   if (validObservations.length < 3) {
@@ -299,6 +294,7 @@ export async function trackBaseballSparse(
 
   const firstSeen = validObservations[0].frame;
   const lastSeen = validObservations[validObservations.length - 1].frame;
+  const evidence=assessTrackEvidence(validObservations,fps);
 
   if (onProgress) {
     onProgress(100, lastSeen, `追蹤完成：獲取 ${validObservations.length} 個真實視覺觀測點 (F${firstSeen} ~ F${lastSeen})`);
@@ -309,7 +305,7 @@ export async function trackBaseballSparse(
     visibleEndFrame: lastSeen,
     firstSeenFrame: firstSeen,
     lastSeenFrame: lastSeen,
-    status: 'reliable',
-    statusMessage: `取得 ${validObservations.length} 個實測觀測點 (F${firstSeen} ~ F${lastSeen})，通過真實性檢驗。`
+    status: evidence.valid?'reliable':'sparse',
+    statusMessage: `取得 ${validObservations.length} 個影像候選觀測 (F${firstSeen} ~ F${lastSeen})，時空閘門${evidence.valid?'通過':'未通過：'+evidence.reasons.join('、')}；仍需確認球體身份。`
   };
 }

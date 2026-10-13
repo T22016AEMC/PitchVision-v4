@@ -28,3 +28,11 @@ Static Site 已成功建立且首部署為 live，詳見 DEPLOYMENT.md。測試�
 另有使用者既存 Docker Web Service srv-db74lvs9v7es73afaa80（https://pitchvision-v4.onrender.com）。正式選用上述 Static Site；未擅自刪除舊服務或私人GHCR套件。
 
 尚待實機、多網路、完整人工影格真值驗證；V3 缺 demo、Knuckle Curve 別名錯配、POOR 擬合等詳見 SCIENTIFIC_ISSUES.md。不要修改演算法以讓結果變好。
+
+## 2026-10-14 V4.1 授權升級
+
+使用者已授權時間／追蹤／空間及物理反推修正。已在原專案完成 UI 整合、PTS 解析、候選品質、已知矩形相機條件校正與阻力／Magnus整合；沒有改資料庫或部署架構。baseline/v4/src保留升級前source，其餘資源與設定沿用原V3快照，完整歷史基準为Git b41c312。
+
+TypeScript、Build、256組凍結V3/V4歷史比對與50項V4.1科學測試通過；舊手動直球RPM／Axis／Efficiency在相同輸入回歸不變。兩支影片本地功能與320至1440px布局通過，影片與圖像不提交。自動真正投球事件、實際球軌跡、自動球種差異與完整自動3D尚未通過，详見V41_ACCEPTANCE.md。
+
+Actions Secret RENDER_DEPLOY_HOOK已設定並於前次b41c312證明能推送觸發，V4.1沿用原流程。公開驗收與實際部署SHA另由最後交付記錄確認；不要把此處本地測試當作公開發佈成功。

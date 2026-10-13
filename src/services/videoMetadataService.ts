@@ -63,7 +63,7 @@ export function assessVideoQuality(
   fps: number,
   durationSec: number
 ): VideoQualityAssessment {
-  const warnings: string[] = [];
+  const warnings: string[] = ['曝光、相機穩定性與背景類型尚未獨立量測；品質分數只含FPS/解析度先驗。'];
   const resolution = `${width}x${height}`;
   const minDim = Math.min(width, height);
 

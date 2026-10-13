@@ -1,4 +1,5 @@
 import { SpatialCalibrationInfo, TrajectoryPoint, CameraViewMode, PitcherBiometrics } from './types';
+import type { CameraGeometry } from './services/cameraGeometry';
 
 // 出手點至捕手進手套之標準距離 (60.5英尺約18.44m，扣除出手延伸量約1.84m，加上手套接球深度約0.9m，標準距離為 17.5 公尺)
 export const STANDARD_GLOVE_DISTANCE_METERS = 17.5;
@@ -60,7 +61,8 @@ export function calibrate3DSpatialContext(
   gloveFrame: number,
   cameraView: CameraViewMode = 'catcher',
   pitchType: string = '四縫線直球 (Fastball)',
-  biometrics: PitcherBiometrics = DEFAULT_PITCHER_BIOMETRICS
+  biometrics: PitcherBiometrics = DEFAULT_PITCHER_BIOMETRICS,
+  cameraGeometry?: CameraGeometry
 ): SpatialCalibrationInfo {
   const bio = biometrics || DEFAULT_PITCHER_BIOMETRICS;
 
@@ -99,7 +101,7 @@ export function calibrate3DSpatialContext(
   // 3. 結合【跨步距離】推算之出手橫向偏移點與延伸量
   const releaseSideCm = Number((52.0 + (90 - armAngle) * 0.45).toFixed(1));
   const releaseExtensionM = bio.calculatedExtensionM;
-  const effectiveDistanceM = bio.effectiveTravelDistanceM;
+  const effectiveDistanceM = cameraGeometry?.method==='planar_reference' ? cameraGeometry.referenceLengthM! : bio.effectiveTravelDistanceM;
 
   // 4. 投手丘俯衝下墜斜率 (度數)
   const targetGloveHeightCm = 65.0; // 捕手接球平均高度約 65cm
@@ -108,8 +110,8 @@ export function calibrate3DSpatialContext(
 
   // 5. 相機視角透視與尺度校正 (Perspective / Scale Calibrated Estimate)
   // 若無多點世界座標標定點，誠實標示為 Perspective / Scale Calibrated Estimate，不宣稱 Strict 3D Homography
-  const viewAzimuth = cameraView === 'catcher' ? 0.0 : 0.0;
-  const viewElevation = cameraView === 'catcher' ? 2.5 : -1.8;
+  const viewAzimuth = cameraGeometry?.method==='planar_reference' ? cameraGeometry.azimuthDeg : 0.0;
+  const viewElevation = cameraGeometry?.method==='planar_reference' ? cameraGeometry.elevationDeg : (cameraView === 'catcher' ? 2.5 : -1.8);
   const viewBaseFactor = cameraView === 'catcher' ? 1.02 : 0.98;
   const moundSlopeFactor = bio.hasMound ? 1.0 : 0.985;
   const extensionRatio = releaseExtensionM / 1.84;
@@ -132,6 +134,7 @@ export function calibrate3DSpatialContext(
     : 'Perspective / Scale Calibrated Estimate (投手後方透視尺度估計，非多點 3D Homography)';
 
   return {
+    camera_geometry: cameraGeometry,
     biometrics: bio,
     mound_height_cm: moundHeightCm,
     detected_pitcher_side: detectedSide,
@@ -146,7 +149,7 @@ export function calibrate3DSpatialContext(
     perspective_homography_factor: homographyFactor,
     view_angle_azimuth_deg: viewAzimuth,
     view_angle_elevation_deg: viewElevation,
-    view_alignment_status: viewAlignmentDesc,
+    view_alignment_status: cameraGeometry?.method==='planar_reference'?'已知地面矩形相機估計（離地深度非唯一）':viewAlignmentDesc,
     homography_matrix_3x3: homographyMatrix,
     calibration_status: `Perspective / Scale Calibrated Estimate：${moundDesc}、身高 ${bio.pitcherHeightCm}cm、跨步 ${strideDesc}、延伸 ${releaseExtensionM}m、${armSlotName} ${armAngle}°出手角`,
     is_aligned_to_database: true,
@@ -165,9 +168,10 @@ export function alignAndStandardizeVideoSpatialContext(
   cameraView: CameraViewMode = 'catcher',
   pitchType: string = '四縫線直球 (Fastball)',
   biometrics: PitcherBiometrics = DEFAULT_PITCHER_BIOMETRICS,
-  timestamps?: number[]
+  timestamps?: number[],
+  cameraGeometry?: CameraGeometry
 ) {
-  const spatialCalibration = calibrate3DSpatialContext(releaseFrame, gloveFrame, cameraView, pitchType, biometrics);
+  const spatialCalibration = calibrate3DSpatialContext(releaseFrame, gloveFrame, cameraView, pitchType, biometrics, cameraGeometry);
   const targetDistanceM = spatialCalibration.effective_travel_distance_m || STANDARD_GLOVE_DISTANCE_METERS;
   const safeFps = fps > 0 ? fps : 30;
 

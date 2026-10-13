@@ -48,7 +48,7 @@ export class TrajectoryFitEngine {
 
     for (const vPt of videoTrack) {
       const mPt = modelMap.get(vPt.frame);
-      if (!mPt) continue;
+      if (!mPt || vPt.source !== 'vision') continue;
 
       // 轉換為像素距離誤差
       const dx = (vPt.x_norm - mPt.x_norm) * videoWidth;
@@ -61,17 +61,17 @@ export class TrajectoryFitEngine {
       }
     }
 
-    if (errorsPx.length === 0) {
+    if (errorsPx.length < 3) {
       return {
         rmse_px: 0,
         mean_error_px: 0,
         max_error_px: 0,
         max_deviation_px: 0,
-        fit_score: 50,
-        fit_quality: 'MODERATE',
-        compared_points_count: 0,
-        compared_frames_count: 0,
-        summary: '無足夠重疊影格進行閉環前向擬合驗證'
+        fit_score: 0,
+        fit_quality: 'NOT_VALIDATED',
+        compared_points_count: errorsPx.length,
+        compared_frames_count: errorsPx.length,
+        summary: '不足3個獨立真實觀測重疊影格，RMSE與閉環擬合未驗證；插值不當作觀測'
       };
     }
 

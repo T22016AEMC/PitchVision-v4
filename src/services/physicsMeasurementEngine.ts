@@ -1,3 +1,4 @@
+import { measureConditionedMovement } from './conditionedPhysics';
 import {
   BaseballTrackPoint,
   CameraViewMode,
@@ -91,7 +92,7 @@ export class PhysicsMeasurementEngine {
     }
 
     // 5. 透過 Spatial / Camera Calibration 將 Pixel Movement 映射至 Physical Movement (cm)
-    const {
+    let {
       calibratedHorizontalMovementCm,
       calibratedVerticalMovementCm,
       observedIvbInch,
@@ -108,28 +109,45 @@ export class PhysicsMeasurementEngine {
       videoHeight
     );
 
+    const rawIvb=observedIvbInch,rawHb=observedHbInch;
+    let movementValid=false,calibratedUncertainty:number|null=null,calibratedAngle:number|null=null,limitation='無已知尺度與深度：原模型受限估計僅供手動參考，不能當量測';
+    if(spatialCalibration.camera_geometry?.method==='planar_reference' && realObsPoints.length>=4) {
+      try {
+        const measurement=measureConditionedMovement(activeTrack,spatialCalibration.camera_geometry,timestamps?.[releaseFrame]??releaseFrame/safeFps,flightTimeSec,travelDistanceM);
+        if(measurement.valid){observedIvbInch=measurement.ivb;observedHbInch=measurement.hb;movementValid=true;calibratedUncertainty=measurement.uncertainty;calibratedAngle=Math.atan2(measurement.yFit.coeff[1],travelDistanceM/flightTimeSec)*180/Math.PI;limitation=measurement.basis;}
+        else limitation='條件3D重建殘差／加速度不合理：保留原模型參考，不宣稱物理量測';
+      } catch(error) {limitation=error instanceof Error?error.message:'幾何重建失敗';}
+    }
+    if(!movementValid){observedIvbInch=Number(Math.max(-50/2.54,Math.min(65/2.54,rawIvb)).toFixed(1));observedHbInch=Number(Math.max(-75/2.54,Math.min(75/2.54,rawHb)).toFixed(1));}
+    calibratedHorizontalMovementCm=observedHbInch*2.54;calibratedVerticalMovementCm=observedIvbInch*2.54;
+    details.push(`原始未截限估算 IVB ${rawIvb.toFixed(1)} / HB ${rawHb.toFixed(1)} 吋；${limitation}`);
     // 6. 出手仰角 (Release Angle) 估算
-    const { releaseAngleDeg, isReleaseAngleEstimated } = this.estimateReleaseAngle(
+    let { releaseAngleDeg, isReleaseAngleEstimated } = this.estimateReleaseAngle(
       activeTrack,
       releaseFrame,
       spatialCalibration,
       cameraView
     );
+    if(calibratedAngle!==null){releaseAngleDeg=calibratedAngle;isReleaseAngleEstimated=true;}
 
     // 7. 量測品質與不確定度量化
     const trackingRatio = videoMetrics?.tracking_ratio_pct ?? Math.round((realObsPoints.length / Math.max(1, gloveFrame - releaseFrame + 1)) * 100);
-    const { trajectoryQualityScore, movementUncertaintyInch } = this.calculateMovementUncertainty(
+    let { trajectoryQualityScore, movementUncertaintyInch } = this.calculateMovementUncertainty(
       realObsPoints.length,
       trackingRatio,
       videoMetrics?.trajectory_curvature_score || 0,
       activeTrack.length
     );
+    if(calibratedUncertainty!==null)movementUncertaintyInch=calibratedUncertainty;
+    else movementUncertaintyInch=Math.max(movementUncertaintyInch,Math.abs(rawIvb-observedIvbInch),Math.abs(rawHb-observedHbInch));
+    details.push('球速不確定度只反映約一影格事件時間敏感度，不包括未知距離誤差，不是統計信賴區間');
 
     details.push(
       `畫面總位移: ΔX ${horizPx}px, ΔY ${vertPx}px 經透視校正至 IVB ${observedIvbInch >= 0 ? '+' : ''}${observedIvbInch}" / HB ${observedHbInch >= 0 ? '+' : ''}${observedHbInch}" (來源: ${movementSource})`
     );
 
     return {
+      raw_ivb_inch: rawIvb,raw_hb_inch:rawHb,movement_valid:movementValid,movement_limitation:limitation,
       measured_velocity_kmh: measuredVelocityKmh,
       flight_time_sec: flightTimeSec,
       horizontal_movement_2d_px: horizPx,
@@ -144,7 +162,7 @@ export class PhysicsMeasurementEngine {
       tracking_ratio_pct: trackingRatio,
       velocity_uncertainty_kmh: velocityUncertaintyKmh,
       movement_uncertainty_inch: movementUncertaintyInch,
-      movement_source: movementSource,
+      movement_source: movementValid?'CONDITIONED 3D ESTIMATE':'LEGACY MODEL PRIOR / UNCALIBRATED',
       details
     };
   }
@@ -196,7 +214,7 @@ export class PhysicsMeasurementEngine {
       timestamps[gloveFrame] !== undefined
     ) {
       const dt = timestamps[gloveFrame] - timestamps[releaseFrame];
-      if (dt > 0.15 && dt < 1.5) {
+      if (dt > 0) {
         return Number(dt.toFixed(3));
       }
     }
@@ -213,15 +231,16 @@ export class PhysicsMeasurementEngine {
     releaseFrame: number,
     gloveFrame: number
   ): { measuredVelocityKmh: number; velocityUncertaintyKmh: number } {
-    const safeTime = Math.max(0.15, flightTimeSec);
+    const safeTime = flightTimeSec;
+    if(!Number.isFinite(safeTime)||safeTime<=0)throw Error("無效飛行時間");
     const speedMs = distanceM / safeTime;
     const measuredVelocityKmh = Number((speedMs * 3.6).toFixed(1));
 
     // 時間不確定度約為 ±0.5 幀 (快門曝光取樣誤差)
     const flightFrames = Math.max(1, gloveFrame - releaseFrame);
-    const fractionalUncertainty = 0.5 / flightFrames;
+    const fractionalUncertainty = 1 / flightFrames;
     const velocityUncertaintyKmh = Number(
-      Math.max(0.8, Math.min(4.5, measuredVelocityKmh * fractionalUncertainty)).toFixed(1)
+      (measuredVelocityKmh * fractionalUncertainty).toFixed(1)
     );
 
     return {
@@ -310,7 +329,7 @@ export class PhysicsMeasurementEngine {
 
     // 抗重力垂直位移 (IVB) = 純重力下墜量 - 經幾何校正之實測下墜量
     const ivbCm = gravityDropCm - worldObservedDropCm;
-    const clampedIvbCm = Math.max(-50.0, Math.min(65.0, ivbCm));
+    const clampedIvbCm = ivbCm;
     return Number((clampedIvbCm / 2.54).toFixed(1));
   }
 
@@ -337,7 +356,7 @@ export class PhysicsMeasurementEngine {
     const stanceLinearComponentCm = ((spatialCalib.mound_stance_offset_cm || 14.5) * 0.12) * viewDirectionSign;
     const rawHbCm = (horizPx / Math.max(0.8, pxPerCmX)) * viewDirectionSign - stanceLinearComponentCm;
 
-    const clampedHbCm = Math.max(-75.0, Math.min(75.0, rawHbCm));
+    const clampedHbCm = rawHbCm;
     return Number((clampedHbCm / 2.54).toFixed(1));
   }
 

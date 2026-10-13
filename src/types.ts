@@ -42,7 +42,12 @@ export interface DecodedVideoFrame {
 // 影片時序分析 (VideoTiming)
 export interface VideoTiming {
   actualFps: number;
-  fpsSource: 'measured_rvfc' | 'container_metadata' | 'estimated';
+  fpsSource: 'measured_rvfc' | 'container_metadata' | 'container_timestamps' | 'user_supplied' | 'estimated';
+  averageFps?: number;
+  containerFps?: number;
+  timingReliable?: boolean;
+  timingWarning?: string;
+  seekPrecision?: string;
   totalFrames: number;
   durationSec: number;
   isVFR: boolean; // Variable Frame Rate
@@ -274,6 +279,7 @@ export interface SpinMovementMatchModuleResult {
 
 // 3D 空間校正結構
 export interface SpatialCalibrationInfo {
+  camera_geometry?: import('./services/cameraGeometry').CameraGeometry;
   biometrics?: PitcherBiometrics;
   mound_height_cm: number;
   detected_pitcher_side: 'RHP' | 'LHP';
@@ -386,8 +392,8 @@ export interface MatchResult extends PitchRecord {
   source_rpm?: 'VIDEO MEASURED' | 'DATABASE ESTIMATED' | 'MODEL ESTIMATED' | 'MOVEMENT-INFERRED' | 'DATABASE ESTIMATED / MOVEMENT-INFERRED';
   source_spin_axis?: 'VIDEO MEASURED' | 'DATABASE ESTIMATED' | 'MODEL ESTIMATED' | 'MOVEMENT-INFERRED' | 'DATABASE ESTIMATED / MOVEMENT-INFERRED';
   source_spin_efficiency?: 'VIDEO MEASURED' | 'DATABASE ESTIMATED' | 'MODEL ESTIMATED';
-  source_ivb?: 'VIDEO DERIVED' | 'MODEL ESTIMATED' | 'DATABASE ESTIMATED' | 'VIDEO DERIVED / CALIBRATED ESTIMATE' | 'VIDEO DERIVED / 2D';
-  source_hb?: 'VIDEO DERIVED' | 'MODEL ESTIMATED' | 'DATABASE ESTIMATED' | 'VIDEO DERIVED / CALIBRATED ESTIMATE' | 'VIDEO DERIVED / 2D';
+  source_ivb?: 'VIDEO DERIVED' | 'MODEL ESTIMATED' | 'DATABASE ESTIMATED' | 'VIDEO DERIVED / CALIBRATED ESTIMATE' | 'VIDEO DERIVED / 2D' | 'LEGACY MODEL PRIOR / UNCALIBRATED' | 'CONDITIONED 3D ESTIMATE';
+  source_hb?: 'VIDEO DERIVED' | 'MODEL ESTIMATED' | 'DATABASE ESTIMATED' | 'VIDEO DERIVED / CALIBRATED ESTIMATE' | 'VIDEO DERIVED / 2D' | 'LEGACY MODEL PRIOR / UNCALIBRATED' | 'CONDITIONED 3D ESTIMATE';
 
   // 影格與時間戳
   first_reliable_ball_frame?: number | null;
@@ -422,6 +428,10 @@ export interface MatchResult extends PitchRecord {
 
 // 實測物理位移特徵 (Physics Measurement Engine Output)
 export interface ObservedPhysicsMetrics {
+  raw_ivb_inch?: number;
+  raw_hb_inch?: number;
+  movement_valid?: boolean;
+  movement_limitation?: string;
   measured_velocity_kmh: number;
   flight_time_sec: number;
   horizontal_movement_2d_px: number;
@@ -436,7 +446,7 @@ export interface ObservedPhysicsMetrics {
   tracking_ratio_pct: number;
   velocity_uncertainty_kmh: number;
   movement_uncertainty_inch: number;
-  movement_source: 'VIDEO DERIVED / CALIBRATED ESTIMATE' | 'VIDEO DERIVED / 2D';
+  movement_source: 'VIDEO DERIVED / CALIBRATED ESTIMATE' | 'VIDEO DERIVED / 2D' | 'LEGACY MODEL PRIOR / UNCALIBRATED' | 'CONDITIONED 3D ESTIMATE';
   details: string[];
 }
 
@@ -447,7 +457,7 @@ export interface TrajectoryFitMetrics {
   max_error_px: number;
   max_deviation_px?: number;
   fit_score: number; // 0 ~ 100
-  fit_quality: 'EXCELLENT' | 'GOOD' | 'MODERATE' | 'POOR' | 'High Fit' | 'Moderate Fit' | 'Low Fit';
+  fit_quality: 'EXCELLENT' | 'GOOD' | 'MODERATE' | 'POOR' | 'High Fit' | 'Moderate Fit' | 'Low Fit' | 'NOT_VALIDATED';
   compared_points_count: number;
   compared_frames_count?: number;
   summary: string;

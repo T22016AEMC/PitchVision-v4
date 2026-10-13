@@ -1,3 +1,6 @@
+import { ScientificInfoPanel } from './components/ScientificInfoPanel';
+import { CameraGeometry, ImagePoint, calibrateGroundReference, estimateImageLines } from './services/cameraGeometry';
+import { VideoTimingService } from './services/videoTimingService';
 import React, { useState, useMemo, ChangeEvent, useEffect, useRef } from 'react';
 import {
   PITCH_DATABASE,
@@ -25,7 +28,6 @@ import { MetricsPanel } from './components/MetricsPanel';
 import { PitcherSetupCard } from './components/PitcherSetupCard';
 import { DatabaseModal } from './components/DatabaseModal';
 import { CodeViewerModal } from './components/CodeViewerModal';
-import { ManualAnchorPanel } from './components/ManualAnchorPanel';
 import { APP_PY_CODE } from './appPyCode';
 import { trackBaseballSparse } from './baseballTracker';
 import { validateAndReconstructVideoTrack } from './services/trajectoryValidationService';
@@ -48,8 +50,6 @@ import {
   Eye,
   RotateCcw,
   Loader2,
-  Maximize2,
-  Minimize2,
   AlertTriangle,
   ShieldCheck
 } from 'lucide-react';
@@ -76,7 +76,19 @@ export default function App() {
   const [visibleEndFrame, setVisibleEndFrame] = useState<number>(0);
   const [currentVideoFrame, setCurrentVideoFrame] = useState<number>(0);
   const [targetFrameSeek, setTargetFrameSeek] = useState<number | null>(null);
-  const [isVideoExpanded, setIsVideoExpanded] = useState<boolean>(false);
+  const [scienceOpen,setScienceOpen]=useState(false);
+  const [manualFrames,setManualFrames]=useState(false);
+  const [cameraGeometry,setCameraGeometry]=useState<CameraGeometry|null>(null);
+  const [referencePoints,setReferencePoints]=useState<(ImagePoint|null)[]>([null,null,null,null]);
+  const [referenceSelection,setReferenceSelection]=useState<number|null>(null);
+  const [referenceWidth,setReferenceWidth]=useState(2);
+  const [referenceLength,setReferenceLength]=useState(17.5);
+  const [referenceConfirmed,setReferenceConfirmed]=useState(false);
+  const [referenceFocal,setReferenceFocal]=useState<number|undefined>();
+  const analysisDistance=cameraGeometry?.method==='planar_reference'?cameraGeometry.referenceLengthM!:biometrics.effectiveTravelDistanceM;
+  const markRelease=(frame:number)=>{setReleaseFrame(frame);setManualFrames(true);setHasAnalyzed(false);setManualAnchor(prev=>prev?{...prev,point1:undefined}:null);};
+  const markGlove=(frame:number)=>{setGloveFrame(frame);setVisibleEndFrame(frame);setManualFrames(true);setHasAnalyzed(false);setManualAnchor(prev=>prev?{...prev,point2:undefined}:null);};
+  const showScience=()=>{setScienceOpen(true);requestAnimationFrame(()=>document.getElementById('science-center')?.scrollIntoView());};
 
   // 手動雙錨點模式 (Manual Anchor Mode - 作為輔助走廊，不直接取代整條球路)
   const [manualAnchor, setManualAnchor] = useState<ManualAnchorInput | null>(null);
@@ -201,6 +213,7 @@ export default function App() {
     if (!file) return;
 
     setVideoLoadError(null);
+    setManualFrames(false);setCameraGeometry(null);setReferencePoints([null,null,null,null]);setReferenceConfirmed(false);
     setHasAnalyzed(false);
     setAiDetection(null);
     setAutoDetectResult(null);
@@ -223,6 +236,7 @@ export default function App() {
       setTotalVideoFrames(loadResult.totalFrames);
       setVideoFps(loadResult.actualFps);
       setVideoTiming({
+        ...loadResult.timing,
         durationSec: loadResult.durationSec,
         timeBase: loadResult.fpsSource === 'measured_rvfc' ? 'timestamp' : 'fps_derived',
         actualFps: loadResult.actualFps,
@@ -234,8 +248,8 @@ export default function App() {
         height: loadResult.height
       });
       setVideoQuality(loadResult.qualityAssessment);
-      setReleaseFrame(loadResult.initialReleaseFrame);
-      setGloveFrame(loadResult.initialGloveFrame);
+      setReleaseFrame(0);
+      setGloveFrame(0);
       setVisibleEndFrame(loadResult.initialGloveFrame);
       setCurrentVideoFrame(loadResult.initialReleaseFrame);
       setTargetFrameSeek(loadResult.initialReleaseFrame);
@@ -249,7 +263,7 @@ export default function App() {
 
   // 真正的 AI 自動搜尋出手 / 進手套 (執行 Coarse-to-Fine 視覺影格掃描 + BallDetectionEngine + Temporal Track)
   const handleAiAutoDetectFrames = async () => {
-    if (!isVideoLoaded) return;
+    if (!isVideoLoaded || !videoTiming?.timingReliable) return;
 
     const videoEl = videoElementRef.current;
     if (!videoEl || videoEl.readyState < 1) {
@@ -269,6 +283,7 @@ export default function App() {
         durationSec: videoTiming?.durationSec || videoEl.duration || totalVideoFrames / videoFps,
         cameraView: cameraViewMode,
         selectedPitchType,
+        manualAnchor: manualAnchor||undefined,
         videoWidth: videoEl.videoWidth || videoTiming?.width || 720,
         videoHeight: videoEl.videoHeight || videoTiming?.height || 1280,
         timestamps: videoTiming?.timestamps,
@@ -299,12 +314,6 @@ export default function App() {
         });
       } else {
         // SUCCESS 或 LOW_CONFIDENCE：填入視覺偵測到的出手與進手套影格
-        setReleaseFrame(result.releaseFrame);
-        setGloveFrame(result.gloveFrame);
-        setVisibleEndFrame(result.gloveFrame);
-        setCurrentVideoFrame(result.releaseFrame);
-        setTargetFrameSeek(result.releaseFrame);
-
         setAiDetection({
           status: result.status,
           releaseFrame: result.releaseFrame,
@@ -351,9 +360,11 @@ export default function App() {
 
   // 啟動真實電腦視覺棒球追蹤、空間校正與位移反查資料庫分析
   const handleStartAnalysis = async () => {
-    if (!isVideoLoaded) return;
+    if (!isVideoLoaded || !videoTiming?.timingReliable) return;
 
     setIsAnalyzing(true);
+    videoElementRef.current?.pause();
+    try {
     setAnalysisProgress(10);
     setAnalysisStepText(`【步驟 1/6】鎖定出手影格 (F${releaseFrame}) 與進手套影格 (F${gloveFrame})...`);
 
@@ -370,6 +381,7 @@ export default function App() {
           fps: videoFps,
           cameraView: cameraViewMode,
           manualAnchor: manualAnchor || undefined,
+          timestamps: videoTiming?.timestamps,
           onProgress: (pct, _curF, stageText) => {
             const scaled = Math.round(20 + pct * 0.3);
             setAnalysisProgress(scaled);
@@ -399,6 +411,11 @@ export default function App() {
       videoHeight: videoElementRef.current?.videoHeight || videoTiming?.height || 1280
     });
 
+    if (videoElementRef.current && cameraGeometry?.method !== 'planar_reference') {
+      const canvas=document.createElement('canvas');canvas.width=videoElementRef.current.videoWidth;canvas.height=videoElementRef.current.videoHeight;
+      const decoded=await VideoTimingService.seekAndCaptureFrame(videoElementRef.current,releaseFrame,videoFps,canvas,videoTiming?.timestamps[releaseFrame]);
+      if(decoded.imageData)setCameraGeometry(estimateImageLines(decoded.imageData));
+    }
     setVideoTrack(validationResult.videoTrack);
     setVideoMetrics(validationResult.metrics);
 
@@ -451,21 +468,24 @@ export default function App() {
     setAnalysisProgress(100);
     setIsAnalyzing(false);
     setHasAnalyzed(true);
+    } catch(error) {
+      setVideoLoadError(error instanceof Error?error.message:'分析失敗，請確認影格與影片');
+    } finally { setIsAnalyzing(false); }
   };
 
   // Physical calculations prioritizing timestamps[] over frame / fps
   const { velocityKmh, flightSeconds, flightFrames } = useMemo(() => {
-    if (releaseFrame <= 0 || gloveFrame <= releaseFrame) {
+    if (releaseFrame < 0 || gloveFrame <= releaseFrame) {
       return { velocityKmh: 0, flightSeconds: 0, flightFrames: 0 };
     }
     return calculateVelocity(
       releaseFrame,
       gloveFrame,
       videoFps,
-      biometrics.effectiveTravelDistanceM,
+      analysisDistance,
       videoTiming?.timestamps
     );
-  }, [releaseFrame, gloveFrame, videoFps, biometrics.effectiveTravelDistanceM, videoTiming?.timestamps]);
+  }, [releaseFrame, gloveFrame, videoFps, analysisDistance, videoTiming?.timestamps]);
 
   // Match result with PitchVision Synthetic Physics Reference Dataset
   const matchedResult = useMemo(() => {
@@ -488,7 +508,8 @@ export default function App() {
       strictPitchTypeMode,
       allowCrossTypeFallback,
       isManualUsed,
-      autoDetectResult?.confidence
+      autoDetectResult?.confidence,
+      cameraGeometry || undefined
     );
   }, [
     hasAnalyzed,
@@ -507,12 +528,14 @@ export default function App() {
     strictPitchTypeMode,
     allowCrossTypeFallback,
     manualAnchor,
-    autoDetectResult?.confidence
+    autoDetectResult?.confidence,
+    cameraGeometry
   ]);
 
   // 回復 AI 建議影格
   const handleResetToAiFrames = () => {
     if (aiDetection && aiDetection.releaseFrame > 0 && aiDetection.gloveFrame > aiDetection.releaseFrame) {
+      setManualFrames(true);
       setReleaseFrame(aiDetection.releaseFrame);
       setGloveFrame(aiDetection.gloveFrame);
       setVisibleEndFrame(aiDetection.gloveFrame);
@@ -569,7 +592,7 @@ export default function App() {
             <div className="flex items-center gap-2">
               <h1 className="text-base sm:text-lg font-black text-white tracking-tight flex items-center gap-2">
                 <span className="text-transparent bg-clip-text bg-gradient-to-r from-orange-400 via-amber-300 to-cyan-400">
-                  PitchVision V4 Baseline
+                  PitchVision V4.1
                 </span>
                 <span className="text-xs sm:text-sm font-semibold text-slate-300 hidden md:inline">
                   投球物理量測與位移反查系統
@@ -579,50 +602,19 @@ export default function App() {
                 80 ~ 140 km/h
               </span>
               <span className="hidden sm:inline-block text-[10px] font-mono bg-cyan-950/80 text-cyan-300 border border-cyan-500/30 px-2 py-0.5 rounded-full">
-                Perspective / Scale Calibrated
+                Geometry / Physics Estimate
               </span>
             </div>
             <p className="text-xs text-slate-400">
-              位移為實測觀測值 • RPM / Spin Axis 為同球種位移反查推論結果 • Gravity + Drag + Magnus 物理閉環驗證
+              影片時間與影像候選 • 幾何條件推估 • RPM / Spin Axis 模型反推 • 觀測足夠時才驗證物理軌跡
             </p>
           </div>
         </div>
 
         {/* Action Buttons */}
         <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setIsVideoExpanded(!isVideoExpanded)}
-            className={`px-3 py-1.5 rounded-lg text-xs font-medium border flex items-center gap-1.5 transition-colors ${
-              isVideoExpanded
-                ? 'bg-cyan-600 text-white border-cyan-500'
-                : 'bg-slate-800/80 hover:bg-slate-700/80 text-slate-200 border-slate-700/80'
-            }`}
-            title="擴大/還原影片播放器視窗"
-          >
-            {isVideoExpanded ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
-            <span>{isVideoExpanded ? '還原雙欄' : '超大播放視窗'}</span>
-          </button>
+          <button id="btn-science-info" type="button" onClick={showScience} className="p-3 rounded-lg bg-slate-800 text-cyan-300">科學資訊</button>
 
-          <button
-            id="btn-view-database"
-            type="button"
-            onClick={() => setIsDbModalOpen(true)}
-            className="px-3 py-1.5 rounded-lg bg-slate-800/80 hover:bg-slate-700/80 text-slate-200 text-xs font-medium border border-slate-700/80 flex items-center gap-1.5 transition-colors"
-          >
-            <Database className="w-3.5 h-3.5 text-cyan-400" />
-            <span className="hidden sm:inline">檢視</span> Synthetic 參考庫 (1,080 筆)
-          </button>
-
-          <button
-            id="btn-view-code"
-            type="button"
-            onClick={() => setIsCodeModalOpen(true)}
-            className="px-3 py-1.5 rounded-lg bg-slate-800/80 hover:bg-slate-700/80 text-slate-200 text-xs font-medium border border-slate-700/80 flex items-center gap-1.5 transition-colors"
-          >
-            <FileCode className="w-3.5 h-3.5 text-emerald-400" />
-            <span>Python 原始碼</span>
-          </button>
         </div>
       </header>
 
@@ -634,29 +626,7 @@ export default function App() {
           <a href="#btn-start-analysis">3 執行分析</a>
           <a href="#right-column">4 結果與軌跡</a>
         </nav>
-        {/* Streamlit Run Banner */}
-        <div className="mb-6 p-3 rounded-xl bg-slate-900/90 border border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs">
-          <div className="flex items-center gap-2 text-slate-300">
-            <Terminal className="w-4 h-4 text-emerald-400 shrink-0" />
-            <span>
-              已生成單檔 Python 原始碼 <code className="text-amber-300 font-mono">app.py</code>，在終端機直接執行：
-            </span>
-            <code className="bg-slate-950 px-2.5 py-1 rounded-md text-emerald-400 border border-slate-800 font-mono font-semibold">
-              streamlit run app.py
-            </code>
-          </div>
-          <div className="flex items-center gap-2 text-slate-400">
-            <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
-            <span>大尺寸清晰播放器 • 球種鎖定位移反查 • PitchVision Synthetic Physics Reference Dataset (1,080 筆)</span>
-          </div>
-        </div>
-
-        {/* Layout: Normal Dual Column or Expanded Video Mode */}
-        <div
-          className={`grid gap-6 items-start transition-all duration-300 ${
-            isVideoExpanded ? 'grid-cols-1' : 'grid-cols-1 lg:grid-cols-[1.38fr_1fr]'
-          }`}
-        >
+        <div className="grid grid-cols-1 lg:grid-cols-[1.38fr_1fr] gap-6 items-start">
           {/* ================================================================= */}
           {/* 左欄: 影片上傳、大尺寸純淨播放器、AI 視覺自動搜尋影格與手動微調 */}
           {/* ================================================================= */}
@@ -671,7 +641,7 @@ export default function App() {
                 </div>
                 <div className="flex items-center gap-3 text-xs text-slate-400">
                   <span>
-                    有效飛行距離: <strong className="text-cyan-400 font-mono">{biometrics.effectiveTravelDistanceM}m</strong>
+                    使用距離（推估或已知）: <strong className="text-cyan-400 font-mono">{analysisDistance}m</strong>
                   </span>
                   <span>
                     FPS:{' '}
@@ -687,22 +657,6 @@ export default function App() {
                   </span>
                 </div>
               </div>
-
-              {/* 0. 投手丘、身高、跨步距離設定 */}
-              <PitcherSetupCard
-                biometrics={biometrics}
-                onChange={(updated) => setBiometrics(updated)}
-                recomputeBiometrics={computePitcherBiometrics}
-              />
-
-              {/* 影片品質客觀評估 (Video Quality Gate) */}
-              {isVideoLoaded && videoQuality && (
-                <VideoQualityCard
-                  assessment={videoQuality}
-                  videoFileName={videoFileName}
-                  actualFps={videoFps}
-                />
-              )}
 
               {/* 1. 影片上傳器 (單一流程立即初始化並顯示) */}
               <div>
@@ -769,6 +723,11 @@ export default function App() {
                 )}
               </div>
 
+              <details className="rounded border border-slate-700 p-2"><summary>投手／距離進階設定</summary><PitcherSetupCard biometrics={biometrics} onChange={setBiometrics} recomputeBiometrics={computePitcherBiometrics}/></details>
+              {videoTiming&&<div id="timing-status" className="text-xs rounded border border-amber-500/40 p-3">
+                FPS {videoFps.toFixed(4)} / {videoTiming.fpsSource} / {videoTiming.isVFR?'VFR':'CFR'} / {videoTiming.timingReliable?'時間表已取得':'時間未確認'}<br/>{videoTiming.timingWarning}
+                {!videoTiming.timingReliable&&<label>指定可信FPS（CFR假設）<input id="manual-fps" type="number" min="1" max="1000" step="0.001" defaultValue={videoFps} onBlur={e=>{const fps=Number(e.target.value);if(fps>0&&fps<=1000){const count=Math.ceil(videoTiming.durationSec*fps);setVideoFps(fps);setTotalVideoFrames(count);setVideoTiming({...videoTiming,actualFps:fps,fpsSource:'user_supplied',timingReliable:true,isVFR:false,totalFrames:count,timestamps:Array.from({length:count},(_,i)=>i/fps),timeBase:'fps_derived',timingWarning:'使用者指定CFR；VFR/解碼精度仍未驗證。'});}}}/></label>}
+              </div>}
               {/* 2. 視角切換 */}
               <div>
                 <div className="flex items-center justify-between mb-1.5">
@@ -890,18 +849,18 @@ export default function App() {
                   velocityKmh={velocityKmh}
                   pitchName={selectedPitchType}
                   hasAnalyzed={hasAnalyzed}
+                  busy={isAnalyzing||isAutoDetectingFrames}
                   targetFrameSeek={targetFrameSeek}
                   onCurrentFrameChange={(f) => setCurrentVideoFrame(f)}
-                  onSetReleaseFrame={(f) => setReleaseFrame(f)}
-                  onSetGloveFrame={(f) => setGloveFrame(f)}
+                  onSetReleaseFrame={markRelease}
+                  onSetGloveFrame={markGlove}
                   spatialCalibration={matchedResult?.spatial_calibration}
-                  isExpanded={isVideoExpanded}
-                  onToggleExpand={() => setIsVideoExpanded(!isVideoExpanded)}
                   onVideoElementReady={(el) => {
                     videoElementRef.current = el;
                   }}
-                  isSelectingPoint={isSelectingPoint}
+                  isSelectingPoint={referenceSelection !== null ? 1 : isSelectingPoint}
                   onSelectCoordinate={(x, y) => {
+                    if(referenceSelection !== null){setReferencePoints(prev=>prev.map((p,i)=>i===referenceSelection?{x,y}:p));setReferenceSelection(null);return;}
                     if (isSelectingPoint) {
                       handleSetAnchorPoint(isSelectingPoint, x, y);
                     }
@@ -911,33 +870,45 @@ export default function App() {
                 />
               </div>
 
-              {/* 手動雙錨點模式 (作為搜尋走廊輔助，不取代真實視覺觀測) */}
-              {isVideoLoaded && (
-                <div className="pt-1">
-                  <ManualAnchorPanel
-                    currentFrame={currentVideoFrame || releaseFrame}
-                    manualAnchor={manualAnchor}
-                    onSetPoint1={(f, x, y) => {
-                      setManualAnchor((prev) => ({
-                        point1: { frame: f, x_norm: x, y_norm: y },
-                        point2: prev?.point2
-                      }));
-                    }}
-                    onSetPoint2={(f, x, y) => {
-                      setManualAnchor((prev) => ({
-                        point1: prev?.point1,
-                        point2: { frame: f, x_norm: x, y_norm: y }
-                      }));
-                    }}
-                    onClearAnchors={handleClearAnchors}
-                    isSelectingPoint={isSelectingPoint}
-                    onStartSelectingPoint={(pt) => setIsSelectingPoint(pt)}
-                    onCancelSelecting={() => setIsSelectingPoint(null)}
-                    videoFps={videoFps}
-                  />
-                </div>
-              )}
-
+              <div id="manual-controls" className="space-y-3">
+                <FrameSlidersCard
+                  releaseFrame={releaseFrame}
+                  gloveFrame={gloveFrame}
+                  visibleEndFrame={visibleEndFrame}
+                  totalVideoFrames={totalVideoFrames}
+                  fps={videoFps}
+                  timestamps={videoTiming?.timestamps}
+                  aiReleaseFrame={
+                    autoDetectResult?.status && autoDetectResult.status !== 'AUTO_DETECTION_FAILED'
+                      ? autoDetectResult.releaseFrame
+                      : null
+                  }
+                  aiGloveFrame={
+                    autoDetectResult?.status && autoDetectResult.status !== 'AUTO_DETECTION_FAILED'
+                      ? autoDetectResult.gloveFrame
+                      : null
+                  }
+                  disabled={!isVideoLoaded || isAnalyzing || isAutoDetectingFrames}
+                  onChangeReleaseFrame={markRelease}
+                  onChangeGloveFrame={markGlove}
+                  onChangeVisibleEndFrame={(newEnd) => setVisibleEndFrame(newEnd)}
+                  onSeekVideoFrame={handleSeekVideoFrame}
+                />
+              {isVideoLoaded&&<details className="border border-slate-700 p-3 rounded"><summary>球體位置與攝影幾何校正（選填）</summary>
+                <p className="text-xs">影格控制共用上方設定。暫停在球清楚可見的影格後標記位置，僅作追蹤搜尋提示，不當作真實觀測。</p>
+                <div className="flex flex-wrap gap-2"><button id="mark-position-1" onClick={()=>setIsSelectingPoint(1)}>標記首個球位置 F{currentVideoFrame}</button><button id="mark-position-2" onClick={()=>setIsSelectingPoint(2)}>標記末個球位置 F{currentVideoFrame}</button><button onClick={handleClearAnchors}>清除球位置</button></div>
+                <p className="text-xs">{manualAnchor?.point1?`位置1 F${manualAnchor.point1.frame}`:'位置1未設定'} / {manualAnchor?.point2?`位置2 F${manualAnchor.point2.frame}`:'位置2未設定'}</p>
+                <p className="text-xs mt-3">地面已知矩形：依序標記出手端左→右→接球端右→左。只有實際已知尺寸可使用，不要用猜測尺寸當量測。</p>
+                <div className="flex flex-wrap gap-2">{referencePoints.map((p,i)=><button key={i} onClick={()=>setReferenceSelection(i)}>幾何角點{i+1}{p?' ✓':''}</button>)}</div>
+                <label>已知寬(m)<input type="number" value={referenceWidth} onChange={e=>setReferenceWidth(Number(e.target.value))}/></label>
+                <label>出手端至接球端已知長(m)<input type="number" value={referenceLength} onChange={e=>setReferenceLength(Number(e.target.value))}/></label>
+                <label>已校準焦距(px，選填)<input type="number" value={referenceFocal??''} onChange={e=>setReferenceFocal(Number(e.target.value)||undefined)}/></label>
+                <label><input type="checkbox" checked={referenceConfirmed} onChange={e=>setReferenceConfirmed(e.target.checked)}/>已確認矩形與實際尺度</label>
+                <button id="apply-camera-calibration" disabled={!referenceConfirmed||referencePoints.some(p=>!p)} onClick={()=>{try{const v=videoElementRef.current!;setCameraGeometry(calibrateGroundReference(v.videoWidth,v.videoHeight,{points:referencePoints as ImagePoint[],widthM:referenceWidth,lengthM:referenceLength,focalPx:referenceFocal}));setHasAnalyzed(false);}catch(e){setVideoLoadError(e instanceof Error?e.message:'標定失敗');}}}>套用幾何標定</button>
+                <button onClick={()=>{setCameraGeometry(null);setReferenceConfirmed(false);setReferencePoints([null,null,null,null]);}}>清除幾何標定</button>
+                {cameraGeometry&&<p id="camera-geometry-status" className="text-xs">{cameraGeometry.method} / {cameraGeometry.method==='planar_reference'?`yaw ${cameraGeometry.azimuthDeg.toFixed(1)}° / pitch ${cameraGeometry.elevationDeg.toFixed(1)}°`:'yaw / pitch 未估定'} / roll {cameraGeometry.rollDeg.toFixed(1)}°<br/>{cameraGeometry.limitations.join('；')}</p>}
+              </details>}
+              </div>
               {/* 5. 自定義出手與進手套影格調整 + 真正的 AI 自動搜尋出手 / 進手套 */}
               <div className="space-y-2 pt-1">
                 <div className="flex flex-wrap items-center justify-between gap-2">
@@ -951,7 +922,7 @@ export default function App() {
                       <button
                         id="btn-ai-auto-detect-frames"
                         type="button"
-                        disabled={isAutoDetectingFrames || isAnalyzing}
+                        disabled={isAutoDetectingFrames || isAnalyzing || !videoTiming?.timingReliable}
                         onClick={handleAiAutoDetectFrames}
                         className="text-[11px] text-cyan-300 hover:text-white flex items-center gap-1.5 transition-colors font-semibold bg-cyan-950/80 hover:bg-cyan-900/80 border border-cyan-500/40 px-2.5 py-1 rounded-lg disabled:opacity-50"
                         title="真正逐格讀取影片 Canvas 影像，透過 BallDetectionEngine 搜尋棒球候選並判定出手與進手套影格"
@@ -976,7 +947,7 @@ export default function App() {
                         className="text-[11px] text-slate-400 hover:text-slate-300 flex items-center gap-1 transition-colors font-medium"
                       >
                         <RotateCcw className="w-3 h-3" />
-                        回復 AI 偵測點
+                        採用／恢復候選影格（需人工確認）
                       </button>
                     )}
                   </div>
@@ -1036,7 +1007,7 @@ export default function App() {
 
                     {autoDetectResult.status !== 'AUTO_DETECTION_FAILED' && (
                       <div className="text-[11px] text-slate-300 font-mono">
-                        偵測出手: F{autoDetectResult.releaseFrame} (Evidence {autoDetectResult.releaseEvidence.evidenceScore}) ｜ 偵測進手套: F{autoDetectResult.gloveFrame} (Evidence {autoDetectResult.gloveEvidence.evidenceScore}) ｜ 連續軌跡點: {autoDetectResult.ballTrack.length} 點
+                        候選軌跡起點: F{autoDetectResult.releaseFrame} (Evidence {autoDetectResult.releaseEvidence.evidenceScore}) ｜ 候選終點: F{autoDetectResult.gloveFrame} (Evidence {autoDetectResult.gloveEvidence.evidenceScore}) ｜ 連續候選點: {autoDetectResult.ballTrack.length} 點（非已確認離手／進手套）
                       </div>
                     )}
 
@@ -1047,33 +1018,12 @@ export default function App() {
                         ))}
                       </div>
                     )}
+                    {autoDetectResult.candidateFrames.length>0&&<label className="block text-xs">查看候選影格（不覆蓋設定）<select aria-label="查看候選影格" defaultValue="" onChange={e=>handleSeekVideoFrame(Number(e.target.value))}><option value="" disabled>選擇影格</option>{Array.from(new Set(autoDetectResult.candidateFrames)).map(f=><option key={f} value={f}>F{f}</option>)}</select></label>}
                   </div>
                 )}
 
                 {/* 完全解耦之雙滑桿卡片 */}
-                <FrameSlidersCard
-                  releaseFrame={releaseFrame}
-                  gloveFrame={gloveFrame}
-                  visibleEndFrame={visibleEndFrame}
-                  totalVideoFrames={totalVideoFrames}
-                  fps={videoFps}
-                  timestamps={videoTiming?.timestamps}
-                  aiReleaseFrame={
-                    autoDetectResult?.status && autoDetectResult.status !== 'AUTO_DETECTION_FAILED'
-                      ? autoDetectResult.releaseFrame
-                      : aiDetection?.releaseFrame ?? null
-                  }
-                  aiGloveFrame={
-                    autoDetectResult?.status && autoDetectResult.status !== 'AUTO_DETECTION_FAILED'
-                      ? autoDetectResult.gloveFrame
-                      : aiDetection?.gloveFrame ?? null
-                  }
-                  disabled={!isVideoLoaded}
-                  onChangeReleaseFrame={(newRel) => setReleaseFrame(newRel)}
-                  onChangeGloveFrame={(newGlove) => setGloveFrame(newGlove)}
-                  onChangeVisibleEndFrame={(newEnd) => setVisibleEndFrame(newEnd)}
-                  onSeekVideoFrame={handleSeekVideoFrame}
-                />
+
               </div>
 
               {/* 6. 啟動位移反查與物理閉環驗證分析按鈕 */}
@@ -1081,7 +1031,7 @@ export default function App() {
                 <button
                   id="btn-start-analysis"
                   onClick={handleStartAnalysis}
-                  disabled={isAnalyzing || isAutoDetectingFrames || !isVideoLoaded || releaseFrame < 0 || gloveFrame <= releaseFrame}
+                  disabled={isAnalyzing || isAutoDetectingFrames || !isVideoLoaded || !videoTiming?.timingReliable || !manualFrames || releaseFrame < 0 || gloveFrame <= releaseFrame}
                   className="w-full py-3 rounded-xl bg-gradient-to-r from-blue-600 via-indigo-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500 text-white font-bold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg shadow-blue-600/25 transition-all active:scale-[0.99] disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {isAnalyzing ? (
@@ -1141,22 +1091,22 @@ export default function App() {
                 )}
               </div>
 
-              {/* 7. 實測初速推算說明條 */}
+              {/* 7. 距離／時間平均球速推算說明條 */}
               <div className="text-[11.5px] text-slate-400 bg-slate-950/80 px-3 py-2 rounded-xl border border-slate-800 flex flex-wrap items-center justify-between gap-2">
                 {hasAnalyzed ? (
                   <>
                     <span>
-                      實測初速推算：({biometrics.effectiveTravelDistanceM}m / {flightSeconds}s) × 3.6 ={' '}
+                      距離／時間平均球速推算：({analysisDistance}m / {flightSeconds}s) × 3.6 ={' '}
                       <strong className="text-cyan-400 font-mono text-xs">{velocityKmh} km/h</strong>
                     </span>
                     <span className="text-emerald-400 font-mono flex items-center gap-1">
-                      <CheckCircle className="w-3.5 h-3.5" /> Perspective / Scale Calibrated Estimate ➔ 同球種位移反查完成
+                      <CheckCircle className="w-3.5 h-3.5" /> 分析完成：{matchedResult?.observed_metrics?.movement_valid?'已知尺度下的條件重建':'尺度／軌跡不足，保留原手動模型參考'}
                     </span>
                   </>
                 ) : (
                   <>
                     <span className="text-slate-400">
-                      實測初速推算：依有效飛行距離 ({biometrics.effectiveTravelDistanceM}m / 實測飛行秒數) 計算 [VIDEO DERIVED]
+                      距離／時間平均球速推算：依有效飛行距離 ({analysisDistance}m / 實測飛行秒數) 計算 [VIDEO DERIVED]
                     </span>
                     <span className="text-slate-500 font-mono">
                       影格間隔: {flightFrames > 0 ? `${flightFrames} 幀` : '--'} • 總影格: {totalVideoFrames > 0 ? `${totalVideoFrames} 幀` : '--'}
@@ -1208,7 +1158,7 @@ export default function App() {
               </div>
 
               {rightColumnTab === 'metrics' ? (
-                <MetricsPanel
+                <MetricsPanel compact
                   result={matchedResult || undefined}
                   matchedResult={matchedResult || undefined}
                   calcVelocity={velocityKmh}
@@ -1252,6 +1202,7 @@ export default function App() {
       </main>
 
       {/* Database Viewer Modal */}
+      <ScientificInfoPanel open={scienceOpen} onClose={()=>{setScienceOpen(false);document.getElementById('left-column')?.scrollIntoView();}} result={matchedResult} quality={videoQuality} fileName={videoFileName} fps={videoFps} onDatabase={()=>setIsDbModalOpen(true)} onCode={()=>setIsCodeModalOpen(true)} timingNote={videoTiming?.timingWarning}/>
       <DatabaseModal
         isOpen={isDbModalOpen}
         onClose={() => setIsDbModalOpen(false)}

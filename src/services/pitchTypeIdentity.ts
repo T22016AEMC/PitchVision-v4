@@ -1,0 +1,2 @@
+const types:[string,string[]][]=[['KC',['knuckle curve','knucklecurve','彈指曲球','kc']],['FF',['fastball','四縫線','ff']],['SI',['sinker','伸卡','二縫線','si']],['FC',['cutter','卡特','fc']],['SL',['slider','滑球','sl']],['ST',['sweeper','橫掃','st']],['CU',['curveball','curve','曲球','cu']],['CH',['changeup','變速','ch']],['FS',['splitter','指叉','fs']]];
+export function pitchTypeIdentity(name:string):string|null{const n=name.toLowerCase().trim();for(const [id,aliases]of types)if(aliases.some(a=>a.length===2?n===a:n.includes(a)))return id;return null;}
