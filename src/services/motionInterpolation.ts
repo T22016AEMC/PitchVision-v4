@@ -2,7 +2,18 @@ export interface PixelFrame { width:number; height:number; data:Uint8ClampedArra
 export interface MotionVector { dx:number;dy:number;error:number;texture:number;valid:boolean }
 export interface MotionField { columns:number; rows:number; spacing:number; vectors:MotionVector[] }
 export interface InterpolationQuality { level:'limited'|'low'; reliableFraction:number; movingFraction:number; maxMotionPx:number; meanResidual:number; identicalSources:boolean; note:string }
-export interface MotionPair { a:PixelFrame;b:PixelFrame;forward:MotionField;backward:MotionField;quality:InterpolationQuality }
+export interface MotionPair { a:PixelFrame;b:PixelFrame;forward:MotionField;backward:MotionField;quality:InterpolationQuality; scaleX:number;scaleY:number;motionWidth:number;motionHeight:number }
+
+// Only the motion estimator is reduced. Synthesis always samples the original
+// full-resolution RGBA buffers, rather than upsampling a reduced output image.
+function motionFrame(f:PixelFrame,width:number,height:number):PixelFrame {
+  if(f.width===width&&f.height===height)return f;
+  const data=new Uint8ClampedArray(width*height*4);
+  for(let y=0;y<height;y++)for(let x=0;x<width;x++){
+    const x0=Math.floor(x*f.width/width),x1=Math.max(x0+1,Math.floor((x+1)*f.width/width)),y0=Math.floor(y*f.height/height),y1=Math.max(y0+1,Math.floor((y+1)*f.height/height));
+    for(let c=0;c<3;c++){let sum=0;for(let yy=y0;yy<y1;yy++)for(let xx=x0;xx<x1;xx++)sum+=f.data[(yy*f.width+xx)*4+c];data[(y*width+x)*4+c]=sum/((x1-x0)*(y1-y0));}data[(y*width+x)*4+3]=255;
+  }return{width,height,data};
+}
 
 const gray=(f:PixelFrame)=>{const out=new Float32Array(f.width*f.height);for(let i=0;i<out.length;i++)out[i]=(f.data[4*i]*0.299+f.data[4*i+1]*0.587+f.data[4*i+2]*0.114);return out;};
 function half(a:Float32Array,w:number,h:number){const nw=Math.ceil(w/2),nh=Math.ceil(h/2),out=new Float32Array(nw*nh);for(let y=0;y<nh;y++)for(let x=0;x<nw;x++){let s=0,n=0;for(let j=0;j<2;j++)for(let i=0;i<2;i++){const px=x*2+i,py=y*2+j;if(px<w&&py<h){s+=a[py*w+px];n++;}}out[y*nw+x]=s/n;}return{data:out,w:nw,h:nh};}
@@ -38,7 +49,8 @@ function vectorAt(f:MotionField,x:number,y:number):MotionVector {
 }
 export function estimateMotionPair(a:PixelFrame,b:PixelFrame):MotionPair{
   if(a.width!==b.width||a.height!==b.height||a.width<16||a.height<16||a.data.length!==a.width*a.height*4||b.data.length!==a.data.length)throw Error('相鄰來源影像尺寸不合法');
-  const ga=gray(a),gb=gray(b),forward=field(ga,gb,a.width,a.height),backward=field(gb,ga,a.width,a.height);
+  const reduction=Math.min(1,512/Math.max(a.width,a.height)),motionWidth=Math.max(16,Math.round(a.width*reduction)),motionHeight=Math.max(16,Math.round(a.height*reduction));
+  const ma=motionFrame(a,motionWidth,motionHeight),mb=motionFrame(b,motionWidth,motionHeight),ga=gray(ma),gb=gray(mb),forward=field(ga,gb,motionWidth,motionHeight),backward=field(gb,ga,motionWidth,motionHeight),scaleX=a.width/motionWidth,scaleY=a.height/motionHeight;
   let reliable=0,moving=0,maxMotion=0,residual=0,difference=0;
   for(let i=0;i<ga.length;i++)difference+=Math.abs(ga[i]-gb[i]);
   // Forward/backward consistency rejects occlusion, ambiguous matches and nonlocal jump estimates.
@@ -49,17 +61,18 @@ export function estimateMotionPair(a:PixelFrame,b:PixelFrame):MotionPair{
   }
   for(const v of forward.vectors){if(Math.hypot(v.dx,v.dy)>0.5||v.error>3){moving++;if(v.valid)reliable++;}maxMotion=Math.max(maxMotion,Math.hypot(v.dx,v.dy));residual+=v.error;}
   const fraction=moving?reliable/moving:1,identical=difference/ga.length<0.1;
-  return {a,b,forward,backward,quality:{level:fraction>=0.45?'limited':'low',reliableFraction:fraction,movingFraction:moving/forward.vectors.length,maxMotionPx:maxMotion,meanResidual:residual/forward.vectors.length,identicalSources:identical,note:identical?'相鄰來源相同，無額外運動資訊；不宣稱補出新影像':'局部雙向運動推算；遮蔽／模糊／不一致區保留鄰近原像素。棒球位置未驗證，事件精度仍受原始間距限制。'}};
+  return {a,b,forward,backward,scaleX,scaleY,motionWidth,motionHeight,quality:{level:fraction>=0.45?'limited':'low',reliableFraction:fraction,movingFraction:moving/forward.vectors.length,maxMotionPx:maxMotion*Math.max(scaleX,scaleY),meanResidual:residual/forward.vectors.length,identicalSources:identical,note:identical?'相鄰來源相同，無額外運動資訊；不宣稱補出新影像':'局部雙向運動推算；遮蔽／模糊／不一致區保留鄰近原像素。棒球位置未驗證，事件精度仍受原始間距限制。'}};
 }
 function pixel(f:PixelFrame,x:number,y:number,c:number){x=Math.max(0,Math.min(f.width-1,x));y=Math.max(0,Math.min(f.height-1,y));const ix=Math.floor(x),iy=Math.floor(y),fx=x-ix,fy=y-iy,nx=Math.min(ix+1,f.width-1),ny=Math.min(iy+1,f.height-1);return f.data[(iy*f.width+ix)*4+c]*(1-fx)*(1-fy)+f.data[(iy*f.width+nx)*4+c]*fx*(1-fy)+f.data[(ny*f.width+ix)*4+c]*(1-fx)*fy+f.data[(ny*f.width+nx)*4+c]*fx*fy;}
 export function renderMotionIntermediate(pair:MotionPair,alpha:number):Uint8ClampedArray{
   if(!Number.isFinite(alpha)||alpha<0||alpha>1)throw Error('插值時間比例不合法');
   if(alpha===0)return pair.a.data.slice();if(alpha===1)return pair.b.data.slice();
-  const {a,b,forward,backward}=pair,out=new Uint8ClampedArray(a.data.length);
+  const {a,b,forward,backward,scaleX,scaleY}=pair,out=new Uint8ClampedArray(a.data.length);
+  const at=(f:MotionField,x:number,y:number)=>vectorAt(f,x/scaleX,y/scaleY);
   for(let y=0;y<a.height;y++)for(let x=0;x<a.width;x++){
     let ax=x,ay=y,bx=x,by=y;
-    for(let i=0;i<2;i++){const va=vectorAt(forward,ax,ay),vb=vectorAt(backward,bx,by);ax=x-alpha*va.dx;ay=y-alpha*va.dy;bx=x-(1-alpha)*vb.dx;by=y-(1-alpha)*vb.dy;}
-    const va=vectorAt(forward,ax,ay),vb=vectorAt(backward,bx,by),valid=va.valid&&vb.valid;
+    for(let i=0;i<2;i++){const va=at(forward,ax,ay),vb=at(backward,bx,by);ax=x-alpha*va.dx*scaleX;ay=y-alpha*va.dy*scaleY;bx=x-(1-alpha)*vb.dx*scaleX;by=y-(1-alpha)*vb.dy*scaleY;}
+    const va=at(forward,ax,ay),vb=at(backward,bx,by),valid=va.valid&&vb.valid;
     for(let c=0;c<3;c++)out[(y*a.width+x)*4+c]=valid?pixel(a,ax,ay,c)*(1-alpha)+pixel(b,bx,by,c)*alpha:(alpha<0.5?a:b).data[(y*a.width+x)*4+c];
     out[(y*a.width+x)*4+3]=255;
   }return out;

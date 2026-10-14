@@ -1,7 +1,7 @@
 import {TimePosition} from './analysisTimeline';
 import {PixelFrame,InterpolationQuality} from './motionInterpolation';
 interface Captured extends PixelFrame { mediaTime?:number; index:number }
-export interface PreviewFrame extends PixelFrame {quality:InterpolationQuality; sourceMediaTimes:(number|undefined)[]; sourceIndices:number[];changedA:number;changedB:number}
+export interface PreviewFrame extends PixelFrame {quality:InterpolationQuality; sourceMediaTimes:(number|undefined)[]; sourceIndices:number[];changedA:number;changedB:number;motionWidth:number;motionHeight:number;estimateMs:number;synthesisMs:number}
 
 export class LocalFrameInterpolation {
   private video:HTMLVideoElement;
@@ -54,11 +54,12 @@ export class LocalFrameInterpolation {
     // No compositor metadata means seek precision cannot be independently verified.
     if(mediaTime!==undefined && Math.abs(mediaTime-t)>Math.max(0.004,span*0.2))throw Error('瀏覽器呈現時刻與指定原始PTS不符，停止補幀；可退回原始模式');
     await new Promise<void>(r=>requestAnimationFrame(()=>requestAnimationFrame(()=>r())));
-    const canvas=document.createElement('canvas'),scale=Math.min(1,512/Math.max(v.videoWidth,v.videoHeight));
-    canvas.width=Math.max(16,Math.round(v.videoWidth*scale));canvas.height=Math.max(16,Math.round(v.videoHeight*scale));
+    if(v.videoWidth*v.videoHeight>4_194_304)throw Error('來源畫面超出本機補幀記憶體預算（約4百萬像素）；未降低來源畫質，請使用原始影格');
+    const canvas=document.createElement('canvas');
+    canvas.width=v.videoWidth;canvas.height=v.videoHeight;
     const ctx=canvas.getContext('2d',{willReadFrequently:true});if(!ctx)throw Error('無法讀取局部影像');ctx.drawImage(v,0,0,canvas.width,canvas.height);
     const frame={width:canvas.width,height:canvas.height,data:ctx.getImageData(0,0,canvas.width,canvas.height).data,index,mediaTime};
-    this.frames.set(index,frame);while(this.frames.size>4)this.frames.delete(this.frames.keys().next().value!);return frame;
+    this.frames.set(index,frame);while(this.frames.size>2&&([...this.frames.values()].reduce((n,f)=>n+f.data.byteLength,0)>32*1024*1024||this.frames.size>4))this.frames.delete(this.frames.keys().next().value!);return frame;
   }
   preview(point:TimePosition):Promise<PreviewFrame>{
     const request=++this.latestRequest;
@@ -74,7 +75,7 @@ export class LocalFrameInterpolation {
         const timer=setTimeout(()=>{this.workerPair='';this.worker.terminate();if(!this.disposed){this.workerFailed=false;this.worker=this.createWorker();}finish(new Error('補幀運算逾時；原始模式仍可使用'));},8000);
         const finish=(error?:Error,data?:PreviewFrame)=>{if(settled)return;settled=true;clearTimeout(timer);this.rejectPending=null;this.worker.onmessage=null;this.worker.onerror=null;error?reject(error):resolve(data!);};
         this.rejectPending=error=>finish(error);
-        this.worker.onmessage=({data})=>{if(data.id!==id)return;if(data.error){this.workerPair='';finish(new Error(data.error));return;}this.workerPair=key;finish(undefined,{width:data.width,height:data.height,data:data.pixels,quality:data.quality,sourceMediaTimes:[a.mediaTime,b.mediaTime],sourceIndices:[point.left,point.right],changedA:data.changedA,changedB:data.changedB});};
+        this.worker.onmessage=({data})=>{if(data.id!==id)return;if(data.error){this.workerPair='';finish(new Error(data.error));return;}this.workerPair=key;finish(undefined,{width:data.width,height:data.height,data:data.pixels,quality:data.quality,sourceMediaTimes:[a.mediaTime,b.mediaTime],sourceIndices:[point.left,point.right],changedA:data.changedA,changedB:data.changedB,motionWidth:data.motionWidth,motionHeight:data.motionHeight,estimateMs:data.estimateMs,synthesisMs:data.synthesisMs});};
         this.worker.onerror=()=>{this.workerPair='';finish(new Error('補幀Worker無法使用；請使用原始模式'));};
         const message:any={id,key,alpha:point.alpha};const transfer:Transferable[]=[];
         if(this.workerPair!==key){message.a={width:a.width,height:a.height,data:a.data.slice()};message.b={width:b.width,height:b.height,data:b.data.slice()};transfer.push(message.a.data.buffer,message.b.data.buffer);}
@@ -85,5 +86,6 @@ export class LocalFrameInterpolation {
     };
     const pending=this.queue.then(run,run);this.queue=pending.catch(()=>{});return pending;
   }
+  invalidate(){this.latestRequest++;}
   dispose(){this.disposed=true;this.rejectPending?.(new Error('影片已更換'));this.worker.terminate();this.frames.clear();this.video.pause();this.video.removeAttribute('src');this.video.load();this.video.remove();}
 }

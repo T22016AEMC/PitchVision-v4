@@ -10,3 +10,5 @@ for(const path of ['src/pitchDatabase.json','amateur_pitch_database_v3.json']) {
 execFileSync(process.execPath,['tests/v41-science.mjs'],{stdio:'inherit'});
 
 execFileSync(process.execPath,['tests/v411.mjs'],{stdio:'inherit'});
+
+execFileSync(process.execPath,['tests/v421.mjs'],{stdio:'inherit'});

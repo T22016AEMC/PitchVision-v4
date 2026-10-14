@@ -562,7 +562,7 @@ export default function App() {
             <div className="flex items-center gap-2">
               <h1 className="text-base sm:text-lg font-black text-white tracking-tight flex items-center gap-2">
                 <span className="text-transparent bg-clip-text bg-gradient-to-r from-orange-400 via-amber-300 to-cyan-400">
-                  PitchVision V4.1.1
+                  PitchVision V4.2.1
                 </span>
                 <span className="text-xs sm:text-sm font-semibold text-slate-300 hidden md:inline">
                   投球物理量測與位移反查系統
@@ -590,13 +590,7 @@ export default function App() {
 
       {/* Main Content Layout */}
       <main className="max-w-7xl mx-auto px-4 lg:px-8 py-6">
-        <nav className="mobile-workflow" aria-label="分析操作步驟">
-          <a href="#video-upload-input">1 選擇影片</a>
-          <a href="#btn-ai-auto-detect-frames">2 辨識與校正</a>
-          <a href="#btn-start-analysis">3 執行分析</a>
-          <a href="#right-column">4 結果與軌跡</a>
-        </nav>
-        <div className="grid grid-cols-1 lg:grid-cols-[1.38fr_1fr] gap-6 items-start">
+        <div className="grid grid-cols-1 gap-6 items-start">
           {/* ================================================================= */}
           {/* 左欄: 影片上傳、大尺寸純淨播放器、AI 視覺自動搜尋影格與手動微調 */}
           {/* ================================================================= */}
@@ -693,8 +687,8 @@ export default function App() {
                 )}
               </div>
 
-              <details className="rounded border border-slate-700 p-2"><summary>投手／距離進階設定</summary><PitcherSetupCard biometrics={biometrics} onChange={setBiometrics} recomputeBiometrics={computePitcherBiometrics}/></details>
-              {videoTiming&&<div id="timing-status" className="text-xs rounded border border-amber-500/40 p-3">
+              <PitcherSetupCard biometrics={biometrics} onChange={setBiometrics} recomputeBiometrics={computePitcherBiometrics}/>
+              {videoTiming&&!sourceTimesValid&&<div id="timing-status" className="text-xs rounded border border-amber-500/40 p-3">
                 FPS {videoFps.toFixed(4)} / {videoTiming.fpsSource} / {videoTiming.isVFR?'VFR':'CFR'} / {videoTiming.timingReliable?'時間表已取得':'時間未確認'}<br/>{videoTiming.timingWarning}
                 {!sourceTimesValid&&<div><label>指定可信FPS（CFR假設）<input id="manual-fps" type="number" min="1" max="1000" step="0.001" value={manualFpsDraft} onChange={e=>setManualFpsDraft(e.target.value)}/></label><button id="confirm-manual-fps" onClick={()=>{const fps=Number(manualFpsDraft);if(!Number.isFinite(fps)||fps<=0||fps>1000){setVideoLoadError('FPS須為1至1000的有效數值');return;}const count=Math.ceil(videoTiming.durationSec*fps);setVideoFps(fps);setTotalVideoFrames(count);setVideoTiming({...videoTiming,actualFps:fps,fpsSource:'user_supplied',timingReliable:true,isVFR:false,totalFrames:count,timestamps:Array.from({length:count},(_,i)=>i/fps),timeBase:'fps_derived',timingWarning:'使用者確認CFR時間假設；原始影格數與解碼精度未確認。'});setEvents({release:null,glove:null});setManualAnchor(null);setIsSelectingPoint(null);setTargetFrameSeek(0);setHasAnalyzed(false);setVideoLoadError(null);}}>確認 FPS</button></div>}
               </div>}
@@ -844,12 +838,12 @@ export default function App() {
               </div>
 
               <div className="space-y-3">
-              {isVideoLoaded&&<details className="border border-slate-700 p-3 rounded"><summary>球體位置與攝影幾何校正（選填）</summary>
-                <p className="text-xs">影格控制共用上方設定。暫停在球清楚可見的影格後標記位置，僅作追蹤搜尋提示，不當作真實觀測。</p>
+              {isVideoLoaded&&<details className="border border-slate-700 p-3 rounded"><summary className="text-xs">選填校正操作</summary>
+
                 <div className="flex flex-wrap gap-2"><button id="mark-position-1" disabled={currentViewKind==='interpolated'||isAnalyzing||isAutoDetectingFrames} onClick={()=>setIsSelectingPoint(1)}>標記首個球位置 F{currentVideoFrame}</button><button id="mark-position-2" disabled={currentViewKind==='interpolated'||isAnalyzing||isAutoDetectingFrames} onClick={()=>setIsSelectingPoint(2)}>標記末個球位置 F{currentVideoFrame}</button><button disabled={isAnalyzing||isAutoDetectingFrames} onClick={handleClearAnchors}>清除球位置</button></div>
                 <label className="block text-xs">球最後可見原始索引（追蹤提示，非接球事件）<input id="visible-end-frame" disabled={isAnalyzing||isAutoDetectingFrames} type="number" min={releaseFrame} max={totalVideoFrames-1} value={visibleEndFrame} onChange={e=>setVisibleEndFrame(Math.max(releaseFrame,Math.min(totalVideoFrames-1,Number(e.target.value))))}/></label>
                 <p className="text-xs">{manualAnchor?.point1?`位置1 F${manualAnchor.point1.frame}`:'位置1未設定'} / {manualAnchor?.point2?`位置2 F${manualAnchor.point2.frame}`:'位置2未設定'}</p>
-                <p className="text-xs mt-3">地面已知矩形：依序標記出手端左→右→接球端右→左。只有實際已知尺寸可使用，不要用猜測尺寸當量測。</p>
+                <p className="text-xs">已知矩形角點：出手端左→右→接球端右→左；請輸入實際量測尺度。</p>
                 <div className="flex flex-wrap gap-2">{referencePoints.map((p,i)=><button key={i} disabled={currentViewKind==='interpolated'||isAnalyzing||isAutoDetectingFrames} onClick={()=>setReferenceSelection(i)}>幾何角點{i+1}{p?' ✓':''}</button>)}</div>
                 <label>已知寬(m)<input type="number" value={referenceWidth} onChange={e=>setReferenceWidth(Number(e.target.value))}/></label>
                 <label>出手端至接球端已知長(m)<input type="number" value={referenceLength} onChange={e=>setReferenceLength(Number(e.target.value))}/></label>

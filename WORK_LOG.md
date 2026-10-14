@@ -48,3 +48,10 @@ Actions Secret RENDER_DEPLOY_HOOK已設定並於前次b41c312證明能推送觸�
 新插值為Worker中的金字塔局部區塊運動匹配＋前後向檢查＋反向warp，512px長邊局部預覽、4張LRU來源、單一運動場對；虛擬時間軸保留所有原PTS及90Hz網格。兩片實際畫面已生成，但品質低且球位置未驗證。
 
 256歷史比對、56項V4.1科學、70項V4.1.1測試及型別／Build通過。本地完整Browser E2E（原始／推算事件、重算、自動失敗、Worker失敗、FPS確認）與最後播放／暫停同步檢查通過。沒有真手機或儀器精度真值。流程仍是既有baseline-v4→Actions→Hook→同一Static Site；公開版本SHA與結果在最後交付記錄，詳見V411_ACCEPTANCE.md。
+# 2026-10-14 V4.2.1
+
+以現有3bfdb45（4.1.1）修復影格／滑桿／原尺寸補幀與指定UI；本地與遠端没有独立4.2分支。原始STSZ／STTS與PTS162／156一致，Chrome逐一定位全部318個PTS，沒有相鄰重複畫面；舊30FPS是估計203／196位置，不能據此宣稱已完整解釋使用者20→8的個案。
+
+低解析度運動估計、原RGBA全尺寸合成已實際輸出720×1280；固定90Hz操作索引、Pointer Capture、單一TimePosition、同位置重試revision與過期请求保護。兩片原始與推算事件分析、重新分析、換片、Worker失敗回退、未知PTS手動FPS確認均通過本地Browser E2E；實際觸控模擬與桌面全寬滑桿另驗證成功。詳細數值／限制見V421_ACCEPTANCE.md。TypeScript、Build、256＋56＋70＋830回歸通過，30科學／資料檔案雜湊不變。
+
+保留原Render Static Site、Workflow／Hook；推送後的公開验收證據另記忽略的test-results/V421_DELIVERY.md，不把本地測試當公開部署或真手機驗收。測試影片不提交。

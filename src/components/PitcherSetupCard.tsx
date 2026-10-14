@@ -29,6 +29,7 @@ export const PitcherSetupCard: React.FC<PitcherSetupCardProps> = ({
   };
 
   const handleHeightChange = (height: number) => {
+    if(!Number.isFinite(height))return;
     const clamped = Math.max(130, Math.min(215, height));
     const updated = recomputeBiometrics(
       biometrics.hasMound,
@@ -50,6 +51,7 @@ export const PitcherSetupCard: React.FC<PitcherSetupCardProps> = ({
   };
 
   const handleManualStrideChange = (strideCm: number) => {
+    if(!Number.isFinite(strideCm))return;
     const clamped = Math.max(80, Math.min(210, strideCm));
     const updated = recomputeBiometrics(
       biometrics.hasMound,
@@ -164,7 +166,8 @@ export const PitcherSetupCard: React.FC<PitcherSetupCardProps> = ({
             />
             <input
               type="number"
-              min="140"
+              id="height-number"
+              min="130"
               max="215"
               value={biometrics.pitcherHeightCm}
               onChange={(e) => handleHeightChange(Number(e.target.value))}
@@ -172,22 +175,8 @@ export const PitcherSetupCard: React.FC<PitcherSetupCardProps> = ({
             />
           </div>
 
-          {/* Quick presets */}
-          <div className="flex items-center justify-between gap-1">
-            {[170, 175, 178, 183, 188].map((h) => (
-              <button
-                key={h}
-                type="button"
-                onClick={() => handleHeightChange(h)}
-                className={`text-[10px] px-1.5 py-0.5 rounded font-mono transition-colors ${
-                  biometrics.pitcherHeightCm === h
-                    ? 'bg-blue-600 text-white font-bold'
-                    : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
-                }`}
-              >
-                {h}
-              </button>
-            ))}
+          <div id="height-step-controls" className="grid grid-cols-4 gap-1.5">
+            {[-5,-1,1,5].map(delta=><button key={delta} type="button" aria-label={`身高 ${delta>0?'+':''}${delta} cm`} onClick={()=>handleHeightChange(biometrics.pitcherHeightCm+delta)} className="rounded border border-slate-700 bg-slate-900 font-bold">{delta>0?'+':''}{delta}</button>)}
           </div>
         </div>
 
@@ -259,12 +248,16 @@ export const PitcherSetupCard: React.FC<PitcherSetupCardProps> = ({
                 />
                 <input
                   type="number"
+                  id="stride-number"
                   min="80"
                   max="210"
                   value={biometrics.effectiveStrideDistanceCm}
                   onChange={(e) => handleManualStrideChange(Number(e.target.value))}
                   className="w-16 bg-slate-900 border border-slate-700 text-white font-mono text-xs px-1.5 py-1 rounded text-center focus:outline-none focus:border-emerald-500"
                 />
+              </div>
+              <div id="stride-step-controls" className="grid grid-cols-4 gap-1.5">
+                {[-5,-1,1,5].map(delta=><button key={delta} type="button" aria-label={`跨步 ${delta>0?'+':''}${delta} cm`} onClick={()=>handleManualStrideChange(biometrics.effectiveStrideDistanceCm+delta)} className="rounded border border-slate-700 bg-slate-900 font-bold">{delta>0?'+':''}{delta}</button>)}
               </div>
               <div className="text-[10px] text-slate-400 flex justify-between">
                 <span>佔身高比例: <strong className="text-emerald-300 font-mono">{biometrics.strideRatioPct}%</strong></span>

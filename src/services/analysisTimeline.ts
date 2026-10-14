@@ -13,6 +13,14 @@ export interface SelectedEvent extends TimePosition {
 export interface SelectedEvents { release: SelectedEvent | null; glove: SelectedEvent | null }
 
 export interface AnalysisTimeline {length:number;get:(index:number)=>TimePosition;nearest:(time:number)=>number}
+// Fine-operation positions are a regular 90 Hz grid. Original PTS remain separately
+// available in source mode; never insert originals into this grid's step count.
+export function createFineGridTimeline(times:readonly number[],fps:number,assumed=false):AnalysisTimeline {
+  if(times.length<2||fps>=90-1e-6)return createAnalysisTimeline(times,fps,false,assumed);
+  const first=times[0],last=times.at(-1)!,length=Math.floor((last-first)*90+1e-8)+1;
+  if(!Number.isSafeInteger(length)||length>2_000_000_000)throw Error('時間軸超出支援範圍；請使用原始影格');
+  return {length,get:i=>describePosition(times,first+Math.max(0,Math.min(length-1,Math.round(i)))/90,assumed),nearest:t=>Math.max(0,Math.min(length-1,Math.round((t-first)*90)))};
+}
 export function createAnalysisTimeline(times:readonly number[],fps:number,fine:boolean,assumed=false):AnalysisTimeline {
   const source=(i:number)=>({timeSec:times[i],kind:assumed?'cfr_assumed' as const:'original' as const,left:i,right:i,alpha:0});
   const lower=(a:ArrayLike<number>,x:number)=>{let lo=0,hi=a.length;while(lo<hi){const mid=(lo+hi)>>1;if(a[mid]<x)lo=mid+1;else hi=mid;}return lo;};
