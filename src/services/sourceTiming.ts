@@ -6,8 +6,9 @@ export function sourceFps(times:readonly number[]):number {
 export function formatSourceFps(fps:number):string {
  return Number.isFinite(fps)&&fps>0?(fps<.00005?fps.toPrecision(4):fps.toFixed(4)):'未知／待確認';
 }
-export function normalizeSourceTiming(timing:VideoTiming):VideoTiming {
+export function normalizeSourceTiming(timing:VideoTiming,browserDuration?:number):VideoTiming {
  const fps=sourceFps(timing.timestamps);
  if(!Number.isFinite(fps)||timing.totalFrames!==timing.timestamps.length||!Number.isFinite(timing.durationSec)||timing.durationSec<=0||timing.timestamps.at(-1)!>=timing.durationSec)throw Error('來源時間表／影格數不一致；請確認FPS或重新匯出影片');
+ if(browserDuration!==undefined&&Math.abs(timing.durationSec-browserDuration)>Math.max(.15,browserDuration*.05))throw Error('容器PTS與瀏覽器時長不一致，來源時間不可確認；請明確確認FPS或重新匯出影片');
  return {...timing,actualFps:fps};
 }

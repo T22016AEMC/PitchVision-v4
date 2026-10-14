@@ -159,7 +159,7 @@ export class VideoLoadService {
     let timing: VideoTiming;
     try {
       const parsed=await readMp4Timing(file);
-      timing = parsed?normalizeSourceTiming(parsed):await VideoTimingService.probeVideoTiming(probeVideo);
+      timing = parsed?normalizeSourceTiming(parsed,durationSec):await VideoTimingService.probeVideoTiming(probeVideo);
       if (timing.timingReliable && Math.abs(timing.durationSec - durationSec) > Math.max(0.15, durationSec * 0.05)) {
         timing.timingReliable = false;
         timing.timingWarning = '容器PTS與播放器時長不一致，請人工確認時間。';

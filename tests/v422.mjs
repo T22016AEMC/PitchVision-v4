@@ -12,6 +12,7 @@ check(e.formatSourceFps(0)==='未知／待確認'&&e.formatSourceFps(NaN)==='未
 check(e.createAnalysisTimeline([],NaN,false,true).get(0).timeSec===0,'unknown empty timeline has safe cursor, not undefined frame/time');
 check(!e.hasUsableSourceTimes({actualFps:0,totalFrames:2,timestamps:[0,.1],fpsSource:'container_timestamps'}),'zero FPS cannot enter analysis');
 let rejected=false;try{e.normalizeSourceTiming({actualFps:30,totalFrames:2,timestamps:[0,0],durationSec:1})}catch{rejected=true}check(rejected,'duplicate timing rejected');
+rejected=false;try{e.normalizeSourceTiming({actualFps:30,totalFrames:2,timestamps:[0,.1],durationSec:1},2)}catch{rejected=true}check(rejected,'container/browser duration mismatch becomes unknown, not valid low FPS');
 rejected=false;try{e.eventAnalysisView([0,.1,.2,.3],{release:{timeSec:.15,left:0,right:1},glove:{timeSec:.25,left:2,right:3}})}catch{rejected=true}check(rejected,'stale indices cannot misrepresent event times');
 // Both events inside the same source interval retain their exact time difference.
 const t=Object.freeze([0,.1,.2,.3]),ev=e.eventAnalysisView(t,{release:e.selectEvent(e.describePosition(t,.0222222222222),t,'low'),glove:e.selectEvent(e.describePosition(t,.0777777777777),t,'low')});check(Math.abs(ev.flightSeconds-.0555555555555)<1e-12&&ev.engineTimingBridge.every((x,i,a)=>!i||x>a[i-1]),'same-support events remain separated without corrupting PTS');
