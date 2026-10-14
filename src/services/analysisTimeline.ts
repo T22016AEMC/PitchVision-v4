@@ -82,8 +82,21 @@ export function selectEvent(point:TimePosition,times:readonly number[],quality?:
   const span=right>left?times[right]-times[left]:Math.max(times[left]-times[Math.max(0,left-1)],(times[Math.min(times.length-1,left+1)]??times[left])-times[left]);
   return {...point,previewQuality:quality,sourceSpanSec:span};
 }
-export function eventAnalysisView(times:readonly number[],events:SelectedEvents){
-  if(!events.release||!events.glove||events.glove.timeSec<=events.release.timeSec)throw Error('請設定進手套晚於出手的兩個事件時間');
+export function eventAnalysisView(times:readonly number[],events:SelectedEvents,durationSec?:number){
+  if(!events.release||!events.glove||!Number.isFinite(events.release.timeSec)||!Number.isFinite(events.glove.timeSec)||events.glove.timeSec<=events.release.timeSec)throw Error('請設定進手套晚於出手的兩個有效事件時間');
+  const mediaSlots=()=>{
+    const bridge=[events.release!.timeSec,events.glove!.timeSec];
+    return {releaseFrame:0,gloveFrame:1,timestamps:bridge,engineTimingBridge:bridge,sourceTimestamps:times,eventTimes:{releaseTimeSec:bridge[0],gloveTimeSec:bridge[1]},flightSeconds:bridge[1]-bridge[0],eventOnly:true};
+  };
+  if(durationSec!==undefined){
+    if(!Number.isFinite(durationSec)||durationSec<=0||events.release.timeSec<0||events.glove.timeSec>durationSec)throw Error('事件時間超出影片可用範圍');
+    const usable=times.length>=2&&times.every((t,i)=>Number.isFinite(t)&&t>=0&&(!i||t>times[i-1]));
+    if(!usable||events.release.timeSec<times[0]||events.glove.timeSec>times.at(-1)!){
+      // Legacy event slots, NOT decoded frames, source PTS, or observations.
+      return mediaSlots();
+    }
+  }
+  try {
   if(times.length<2||times.some((t,i)=>!Number.isFinite(t)||t<0||(i>0&&t<=times[i-1])))throw Error('來源PTS無效');
   for(const event of [events.release,events.glove]){
     if(!Number.isFinite(event.timeSec)||event.timeSec<times[0]||event.timeSec>times.at(-1)!)throw Error('事件時間超出來源範圍');
@@ -101,5 +114,10 @@ export function eventAnalysisView(times:readonly number[],events:SelectedEvents)
   if(timestamps.some((t,i)=>i>0&&t<=timestamps[i-1]))throw Error('舊引擎事件時間橋不單調，停止傳遞錯誤時間');
   // This bridge supplies event slots to the unchanged legacy model only. It is
   // not an observed/source timeline and must never reach video decoding/tracking.
-  return {releaseFrame,gloveFrame,timestamps,engineTimingBridge:timestamps,sourceTimestamps:times,eventTimes:{releaseTimeSec:events.release.timeSec,gloveTimeSec:events.glove.timeSec},flightSeconds:events.glove.timeSec-events.release.timeSec};
+  return {releaseFrame,gloveFrame,timestamps,engineTimingBridge:timestamps,sourceTimestamps:times,eventTimes:{releaseTimeSec:events.release.timeSec,gloveTimeSec:events.glove.timeSec},flightSeconds:events.glove.timeSec-events.release.timeSec,eventOnly:false};
+  } catch(error) {
+    // Valid media events remain usable even if legacy source-index mapping fails.
+    if(durationSec!==undefined)return mediaSlots();
+    throw error;
+  }
 }

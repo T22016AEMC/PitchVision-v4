@@ -26,10 +26,23 @@ export function hasUsableSourceTimes(timing: VideoTiming | null | undefined): bo
   return timing.timestamps.length >= 2 && timing.timestamps.every((t, i, a) => Number.isFinite(t) && t >= 0 && (!i || t > a[i - 1]));
 }
 
-export function manualAnalysisReason(loaded: boolean, busy: boolean, autoBusy: boolean, timing: VideoTiming | null, release: number, glove: number, sourceTimesValid=hasUsableSourceTimes(timing)): string | null {
+export function manualEventReason(duration: number | undefined, events: SelectedEvents): string | null {
+  if (!events.release || !events.glove) return '請設定出手與進手套時間。';
+  const release = events.release.timeSec, glove = events.glove.timeSec;
+  if (!Number.isFinite(release) || !Number.isFinite(glove)) return '出手與進手套時間必須為有限秒數。';
+  if (!Number.isFinite(duration) || duration! <= 0) return '影片可用時長無效，無法檢查事件範圍。';
+  if (release < 0 || glove < 0 || release > duration! || glove > duration!) return '事件時間超出影片可用範圍。';
+  if (glove <= release) return '進手套時間必須晚於出手時間。';
+  return null;
+}
+
+export function manualAnalysisReason(loaded: boolean, busy: boolean, autoBusy: boolean, timing: VideoTiming | null, release: number, glove: number, sourceTimesValid=hasUsableSourceTimes(timing), events?: SelectedEvents): string | null {
   if (!loaded) return '請先載入可播放的影片。';
   if (busy) return '分析正在執行。';
   if (autoBusy) return '自動辨識正在讀取影片；可先停止，再使用手動分析。';
+  // Media-time manual inputs do not require an enumerated source timeline.
+  // Index-only legacy callers still need source times to resolve their indices.
+  if (events) return manualEventReason(timing?.durationSec, events);
   if (!sourceTimesValid) return '影片時間表不可用，請輸入並按下「確認 FPS」，採用明示的 CFR 時間假設。';
   if (!Number.isInteger(release) || !Number.isInteger(glove) || release < 0 || glove >= timing!.timestamps.length || glove <= release) return '請設定有效出手與進手套時間，且進手套必須晚於出手。';
   if(timing!.timestamps[glove]>timing!.durationSec+1e-6)return '選取的來源時間超出可播放時長，請重新確認事件時間。';
