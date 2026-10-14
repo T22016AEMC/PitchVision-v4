@@ -16,3 +16,5 @@ execFileSync(process.execPath,['tests/v421.mjs'],{stdio:'inherit'});
 execFileSync(process.execPath,['tests/v422.mjs'],{stdio:'inherit'});
 
 execFileSync(process.execPath,['tests/manual-media-time.mjs'],{stdio:'inherit'});
+
+execFileSync(process.execPath,['tests/v43-controls.mjs'],{stdio:'inherit'});

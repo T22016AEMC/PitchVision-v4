@@ -585,7 +585,7 @@ export default function App() {
             <div className="flex items-center gap-2">
               <h1 className="text-base sm:text-lg font-black text-white tracking-tight flex items-center gap-2">
                 <span className="text-transparent bg-clip-text bg-gradient-to-r from-orange-400 via-amber-300 to-cyan-400">
-                  PitchVision V4.2.2
+                  PitchVision V4.3
                 </span>
                 <span className="text-xs sm:text-sm font-semibold text-slate-300 hidden md:inline">
                   投球物理量測與位移反查系統
@@ -847,6 +847,7 @@ export default function App() {
                   fps={videoFps}
                   timestamps={controlTimes}
                   selectionOnly={selectionOnly}
+                  timestampsArePreviewPositions={selectionOnly}
                   isFpsEstimated={isFpsEstimated}
                   viewMode={cameraViewMode}
                   velocityKmh={velocityKmh}

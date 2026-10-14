@@ -7,6 +7,8 @@ export interface TimePosition {
   alpha: number;
 }
 export interface SelectedEvent extends TimePosition {
+  selectionType?: 'original' | 'interpolated' | 'media_time' | 'cfr_assumed';
+  timelineIndex?: number;
   previewQuality?: 'limited' | 'low' | 'unavailable';
   sourceSpanSec: number;
 }

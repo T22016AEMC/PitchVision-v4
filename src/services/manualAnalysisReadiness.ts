@@ -12,7 +12,7 @@ export function confirmCfrTiming<T extends VideoTiming>(timing: T, fps: number, 
   const remap = (event: SelectedEvents['release']) => {
     if (!event) return null;
     if (!Number.isFinite(event.timeSec) || event.timeSec < 0 || event.timeSec > timestamps.at(-1)!) throw Error('已選事件超出 CFR 可定位範圍，請調整事件時間後再確認 FPS。');
-    return {...selectEvent(describePosition(timestamps, event.timeSec, true), timestamps), kind: 'cfr_assumed' as const};
+    return {...selectEvent(describePosition(timestamps, event.timeSec, true), timestamps), kind: 'cfr_assumed' as const, selectionType:event.selectionType, timelineIndex:event.timelineIndex};
   };
   return {
     timing: {...timing, actualFps: fps, fpsSource: 'user_supplied' as const, timingReliable: true, isVFR: false, totalFrames: count, timestamps, timeBase: 'fps_derived' as const, timingWarning: '使用者確認 CFR 假設；位置數並非已驗證的原始影格數，解碼與事件精度仍受來源限制。'},
