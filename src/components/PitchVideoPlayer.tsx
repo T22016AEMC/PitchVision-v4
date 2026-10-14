@@ -6,13 +6,13 @@ import {TimePosition,SelectedEvent,SelectedEvents,createAnalysisTimeline,createF
 import {LocalFrameInterpolation,PreviewFrame} from '../services/localFrameInterpolation';
 
 interface PitchVideoPlayerProps {
- videoUrl:string|null;releaseFrame:number;gloveFrame:number;totalFrames:number;fps?:number;timestamps?:number[];sourceTiming?:VideoTiming|null;events:SelectedEvents;
+ videoUrl:string|null;releaseFrame:number;gloveFrame:number;totalFrames:number;fps?:number;timestamps?:number[];sourceTiming?:VideoTiming|null;events:SelectedEvents;selectionOnly?:boolean;
  isFpsEstimated?:boolean;viewMode:CameraViewMode;velocityKmh?:number;pitchName?:string;hasAnalyzed?:boolean;busy?:boolean;
  onCurrentFrameChange?:(frame:number)=>void;onPositionChange?:(point:TimePosition)=>void;targetFrameSeek?:number|null;onSetEvent:(name:'release'|'glove',event:SelectedEvent)=>void;
  spatialCalibration?:SpatialCalibrationInfo;onVideoElementReady?:(el:HTMLVideoElement|null)=>void;isSelectingPoint?:1|2|null;onSelectCoordinate?:(x:number,y:number)=>void;
  manualPoint1?:{frame:number;x_norm:number;y_norm:number}|null;manualPoint2?:{frame:number;x_norm:number;y_norm:number}|null;
 }
-export function PitchVideoPlayer({videoUrl,releaseFrame,gloveFrame,totalFrames,fps:providedFps=NaN,timestamps=[],sourceTiming,events,viewMode,busy=false,onCurrentFrameChange,onPositionChange,targetFrameSeek,onSetEvent,onVideoElementReady,isSelectingPoint=null,onSelectCoordinate,manualPoint1,manualPoint2}:PitchVideoPlayerProps){
+export function PitchVideoPlayer({videoUrl,releaseFrame,gloveFrame,totalFrames,fps:providedFps=NaN,timestamps=[],sourceTiming,events,selectionOnly=false,viewMode,busy=false,onCurrentFrameChange,onPositionChange,targetFrameSeek,onSetEvent,onVideoElementReady,isSelectingPoint=null,onSelectCoordinate,manualPoint1,manualPoint2}:PitchVideoPlayerProps){
  const videoRef=useRef<HTMLVideoElement|null>(null),previewCanvas=useRef<HTMLCanvasElement|null>(null),session=useRef<LocalFrameInterpolation|null>(null),request=useRef(0);
  const [isPlaying,setIsPlaying]=useState(false),[isMetadataReady,setIsMetadataReady]=useState(false),[fine,setFine]=useState(false),[position,setPosition]=useState<TimePosition>({timeSec:0,kind:"original",left:0,right:0,alpha:0});
  const [preview,setPreview]=useState<PreviewFrame|null>(null),[previewState,setPreviewState]=useState<'idle'|'processing'|'ready'|'failed'>('idle'),[previewError,setPreviewError]=useState('');
@@ -20,8 +20,8 @@ export function PitchVideoPlayer({videoUrl,releaseFrame,gloveFrame,totalFrames,f
  const [selectionRevision,setSelectionRevision]=useState(0);
  const [sourceSeeking,setSourceSeeking]=useState(false);
  const wasBusy=useRef(false),lastPresented=useRef<number|null>(null),suppressPauseSync=useRef(false),pauseSyncPending=useRef(false);
- const parsedFps=useMemo(()=>sourceFps(timestamps),[timestamps]),fps=Number.isFinite(parsedFps)?parsedFps:providedFps;
- const assumed=sourceTiming?.timeBase!=='timestamp';
+ const parsedFps=useMemo(()=>sourceFps(timestamps),[timestamps]),fps=selectionOnly?NaN:Number.isFinite(parsedFps)?parsedFps:providedFps;
+ const assumed=selectionOnly||sourceTiming?.timeBase!=='timestamp';
  const originalPoints=useMemo(()=>createAnalysisTimeline(timestamps,fps,false,assumed),[timestamps,fps,assumed]);
  const points=useMemo(()=>{try{return fine?createFineGridTimeline(timestamps,fps,assumed):originalPoints;}catch{return originalPoints;}},[timestamps,fps,fine,assumed,originalPoints]);
  const index=points.nearest(position.timeSec),point=position;
@@ -69,6 +69,9 @@ export function PitchVideoPlayer({videoUrl,releaseFrame,gloveFrame,totalFrames,f
  const switchMode=(next:boolean)=>{setFine(next);const timeline=next?createFineGridTimeline(timestamps,fps,assumed):originalPoints,p=timeline.get(timeline.nearest(point.timeSec));if(p)seek(p);};
  const jump=(event:SelectedEvent|null)=>{if(!event)return;const next=event.kind==='interpolated'&&fps<90;setFine(next);const p=next?createFineGridTimeline(timestamps,fps,assumed):originalPoints;seek(p.get(p.nearest(event.timeSec)));};
  useEffect(()=>{const key=(e:KeyboardEvent)=>{if(busy||['INPUT','SELECT','TEXTAREA','BUTTON'].includes((e.target as HTMLElement)?.tagName))return;if(e.key==='ArrowLeft'){e.preventDefault();stepFrame(e.shiftKey?-5:-1);}else if(e.key==='ArrowRight'){e.preventDefault();stepFrame(e.shiftKey?5:1);}else if(e.code==='Space'){e.preventDefault();togglePlay();}else if(e.key==='[')mark('release');else if(e.key===']')mark('glove');};window.addEventListener('keydown',key);return()=>window.removeEventListener('keydown',key);},[index,points,busy,canMark,isPlaying]);
+ const playbackControl=<div id="video-playback-controls" className="bg-[#0b1329]/90 p-3">
+  <button type="button" aria-label={isPlaying?'暫停影片':'播放影片'} aria-pressed={isPlaying} disabled={busy||!isMetadataReady} onClick={togglePlay} className="min-h-11 px-5 rounded bg-blue-600 flex items-center gap-2 disabled:opacity-50">{isPlaying?<Pause size={20}/>:<Play size={20}/>} {isPlaying?'暫停':'播放'}</button>
+ </div>;
  return <div className="space-y-0">
 
       <div 
@@ -162,9 +165,10 @@ export function PitchVideoPlayer({videoUrl,releaseFrame,gloveFrame,totalFrames,f
 
 
       </div>
+      {videoUrl&&points.length===0&&playbackControl}
       {videoUrl&&points.length>0&&<div id="manual-controls" className="bg-[#0b1329]/90 border border-slate-800 rounded-b-xl p-3 space-y-2 text-xs">
        <input id="video-timeline" aria-label="影片時間軸" type="range" min={0} max={points.length-1} value={index} disabled={busy} readOnly onPointerDown={startDrag} onPointerMove={e=>{if(dragging.current===e.pointerId)pointerSeek(e);}} onPointerUp={endDrag} onPointerCancel={()=>{dragging.current=null;}} onLostPointerCapture={()=>{dragging.current=null;}} onKeyDown={e=>{const moves:Record<string,number>={ArrowLeft:-1,ArrowDown:-1,ArrowRight:1,ArrowUp:1,PageDown:-5,PageUp:5};if(e.key in moves){e.preventDefault();stepFrame(moves[e.key]);}else if(e.key==='Home'||e.key==='End'){e.preventDefault();seek(points.get(e.key==='Home'?0:points.length-1));}}} className="w-full accent-cyan-400 timeline-range"/>
-       <div className="flex gap-2 items-center"><button type="button" disabled={busy} onClick={togglePlay} className="px-4 rounded bg-blue-600 flex items-center gap-2">{isPlaying?<Pause size={18}/>:<Play size={18}/>} {isPlaying?'暫停':'播放'}</button></div>
+       {playbackControl}
        <div id="frame-step-controls" className="grid grid-cols-4 gap-2 pt-2">
         {([-5,-1,1,5] as const).map(delta=>{const Icon=delta===-5?ChevronsLeft:delta===-1?ChevronLeft:delta===1?ChevronRight:ChevronsRight;return <button key={delta} title={`${delta<0?'後退':'前進'} ${Math.abs(delta)} 幀`} disabled={busy} onClick={()=>stepFrame(delta)} className="frame-step bg-slate-800 border border-slate-600 rounded-lg flex items-center justify-center gap-1 text-base font-bold"><Icon size={20}/>{delta>0?'+':''}{delta}</button>;})}
        </div>
@@ -173,16 +177,16 @@ export function PitchVideoPlayer({videoUrl,releaseFrame,gloveFrame,totalFrames,f
         <button id="set-glove-time" disabled={!canMark} onClick={()=>mark('glove')} className="px-3 bg-amber-950 border border-amber-500/50 rounded flex gap-1 items-center"><Target size={14}/>設為進手套</button>
        </div>
        <div id="current-time-status" role="status" data-kind={point.kind} data-time={point.timeSec} data-source-index={point.left} data-position-index={index} data-position-count={points.length} data-decoded-time={decodedTime??''} className="text-cyan-200">
-        {fine?`90Hz 位置 ${index}/${points.length-1} · `:''}{point.kind==='interpolated'?'推算':assumed?'原始定位（CFR假設）':'原始'} · {point.kind==='interpolated'?`F${point.left}→${point.right}`:`F${point.left}`} · {point.timeSec.toFixed(6)}s · 來源 {formatSourceFps(fps)} FPS／{assumed?'時間位置數（原始數未確認）':'原始影格'} {totalFrames}
+        {fine?`90Hz 位置 ${index}/${points.length-1} · `:''}{selectionOnly?'時間位置（影格未確認）':point.kind==='interpolated'?'推算':assumed?'原始定位（CFR假設）':'原始'} · {point.kind==='interpolated'?`F${point.left}→${point.right}`:`F${point.left}`} · {point.timeSec.toFixed(6)}s · 來源 {formatSourceFps(fps)} FPS／{assumed?'時間位置數（原始數未確認）':'原始影格'} {totalFrames}
        </div>
        <div className="flex flex-wrap gap-2 items-center">
         <div className="grid grid-cols-2 gap-2 w-full"><button id="mode-source" className={`mode-toggle ${!fine?'mode-active':''}`} aria-pressed={!fine} disabled={busy} onClick={()=>switchMode(false)}>原始影格</button><button id="mode-fine" className={`mode-toggle ${fine?'mode-active':''}`} aria-pressed={fine} disabled={busy||!Number.isFinite(fps)||fps<=0||fps>=90-0.001} onClick={()=>switchMode(true)}>90 FPS 補幀</button></div>
         <label>時間(s)<input id="timeline-time-input" aria-label="定位影片時間" type="number" step="any" min={timestamps[0]??0} max={timestamps.at(-1)??0} value={point.timeSec} disabled={busy} onChange={e=>{const p=points.get(points.nearest(Number(e.target.value)));if(p)seek(p);}} className="w-28"/></label>
-        {!fine&&<label>原始索引<input id="source-frame-input" aria-label="定位原始影格" type="number" min={0} max={timestamps.length-1} value={point.left} disabled={busy} onChange={e=>{const f=Math.max(0,Math.min(timestamps.length-1,Math.round(Number(e.target.value))));seek(points.get(f));}} className="w-20"/></label>}
+        {!fine&&<label>{selectionOnly?'時間位置':'原始索引'}<input id="source-frame-input" aria-label="定位原始影格" type="number" min={0} max={timestamps.length-1} value={point.left} disabled={busy} onChange={e=>{const f=Math.max(0,Math.min(timestamps.length-1,Math.round(Number(e.target.value))));seek(points.get(f));}} className="w-20"/></label>}
        </div>
        <div className="flex flex-wrap gap-2"><button id="jump-release-time" disabled={!events.release||busy} onClick={()=>jump(events.release)}>出手 {events.release?`${events.release.timeSec.toFixed(6)}s · ${events.release.kind==='interpolated'?'推算':events.release.kind==='cfr_assumed'?'CFR假設':'原始'}`:'未設定'}</button><button id="jump-glove-time" disabled={!events.glove||busy} onClick={()=>jump(events.glove)}>進手套 {events.glove?`${events.glove.timeSec.toFixed(6)}s · ${events.glove.kind==='interpolated'?'推算':events.glove.kind==='cfr_assumed'?'CFR假設':'原始'}`:'未設定'}</button></div>
        {fine&&<p className="text-[11px] text-amber-200 min-h-[60px]" title={preview?.quality.note}>推算，非90FPS實拍；原始影格完整保留。{previewState==='processing'?'處理中，目前顯示來源画面…':previewState==='failed'?previewError:preview?`${preview.width}×${preview.height} 原始像素合成；${preview.quality.level==='low'?'低品質，可退回原始影格':'品質有限'}，棒球位置未驗證。`:''}</p>}
-       {!fine&&decodedTime===null&&<p className="text-[11px] text-slate-400">原始PTS定位；瀏覽器未回報呈現時刻時，不保證逐樣本精確解碼。</p>}
+       {!selectionOnly&&!fine&&decodedTime===null&&<p className="text-[11px] text-slate-400">原始PTS定位；瀏覽器未回報呈現時刻時，不保證逐樣本精確解碼。</p>}
       </div>}
     </div>;
 }

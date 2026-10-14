@@ -25,6 +25,7 @@ import {
   MatchResult
 } from './types';
 import { computePitcherBiometrics, DEFAULT_PITCHER_BIOMETRICS } from './spatialCalibration';
+import { FrameSlidersCard } from './components/FrameSlidersCard';
 import { PitchVideoPlayer } from './components/PitchVideoPlayer';
 import { PitchVisualizer } from './components/PitchVisualizer';
 import { MetricsPanel } from './components/MetricsPanel';
@@ -94,8 +95,18 @@ export default function App() {
   const [referenceFocal,setReferenceFocal]=useState<number|undefined>();
   const analysisDistance=cameraGeometry?.method==='planar_reference'?cameraGeometry.referenceLengthM!:biometrics.effectiveTravelDistanceM;
   const setEvent=(name:'release'|'glove',event:SelectedEvent)=>{setEvents(prev=>({...prev,[name]:event}));setHasAnalyzed(false);if(name==='glove')setVisibleEndFrame(event.right);setManualAnchor(prev=>prev?{...prev,[name==='release'?'point1':'point2']:undefined}:null);};
-  const markRelease=(frame:number)=>{if(videoTiming?.timestamps[frame]!==undefined)setEvent('release',selectEvent(describePosition(videoTiming.timestamps,videoTiming.timestamps[frame],videoTiming.timeBase!=='timestamp'),videoTiming.timestamps));};
-  const markGlove=(frame:number)=>{if(videoTiming?.timestamps[frame]!==undefined)setEvent('glove',selectEvent(describePosition(videoTiming.timestamps,videoTiming.timestamps[frame],videoTiming.timeBase!=='timestamp'),videoTiming.timestamps));};
+  // Preview-only positions are not source PTS or measured frames. Quantitative
+  // analysis still requires the unchanged source timing validation.
+  const selectionOnly = !videoTiming?.timestamps.length;
+  const controlTimes = useMemo(() => {
+    if (videoTiming?.timestamps.length) return videoTiming.timestamps;
+    const duration = videoTiming?.durationSec ?? 0;
+    if (!Number.isFinite(duration) || duration <= 0) return [];
+    const intervals = Math.min(60000, Math.ceil(duration * 100));
+    return Array.from({length: intervals + 1}, (_, i) => i * duration / intervals);
+  }, [videoTiming]);
+  const markRelease=(frame:number)=>{if(controlTimes[frame]!==undefined)setEvent('release',{...selectEvent(describePosition(controlTimes,controlTimes[frame],videoTiming?.timeBase!=='timestamp'),controlTimes),...(selectionOnly?{sourceSpanSec:NaN,previewQuality:'unavailable' as const}:{})});};
+  const markGlove=(frame:number)=>{if(controlTimes[frame]!==undefined)setEvent('glove',{...selectEvent(describePosition(controlTimes,controlTimes[frame],videoTiming?.timeBase!=='timestamp'),controlTimes),...(selectionOnly?{sourceSpanSec:NaN,previewQuality:'unavailable' as const}:{})});};
   const showScience=()=>{setScienceOpen(true);requestAnimationFrame(()=>document.getElementById('science-center')?.scrollIntoView());};
 
   // 手動雙錨點模式 (Manual Anchor Mode - 作為輔助走廊，不直接取代整條球路)
@@ -696,8 +707,9 @@ export default function App() {
               </div>
 
               <PitcherSetupCard biometrics={biometrics} onChange={setBiometrics} recomputeBiometrics={computePitcherBiometrics}/>
-              {videoTiming&&!sourceTimesValid&&<div id="timing-status" className="text-xs rounded border border-amber-500/40 p-3">
-                FPS {formatSourceFps(videoFps)} / {videoTiming.fpsSource} / {videoTiming.isVFR?'VFR':'CFR'} / {videoTiming.timingReliable?'時間表已取得':'時間未確認'}<br/>{videoTiming.timingWarning}
+              {videoTiming&&<div id="timing-status" className="text-xs rounded border border-amber-500/40 p-3">
+                <p>{sourceTimesValid ? `FPS ${formatSourceFps(videoFps)} · ${videoTiming.timeBase==='timestamp'?'已確認':'使用者確認（CFR假設）'}` : '時間未確認；仍可播放與暫選時間位置，定量分析需確認 FPS。'}</p>
+                <details className="mt-2 text-slate-400"><summary className="cursor-pointer">進階時間資訊</summary><p className="mt-2">來源：{videoTiming.fpsSource} · {videoTiming.isVFR?'VFR':'CFR'} · 時間基準：{videoTiming.timeBase} · {videoTiming.timingReliable?'時間表已取得':'時間未確認'} · 來源位置數：{videoTiming.timestamps.length}</p><p>{videoTiming.timingWarning}</p></details>
                 {!sourceTimesValid&&<div><label>指定可信FPS（CFR假設）<input id="manual-fps" type="number" min="1" max="1000" step="0.001" value={manualFpsDraft} onChange={e=>setManualFpsDraft(e.target.value)}/></label><button id="confirm-manual-fps" onClick={()=>{const fps=Number(manualFpsDraft);if(!Number.isFinite(fps)||fps<=0||fps>1000){setVideoLoadError('FPS須為1至1000的有效數值');return;}const count=Math.ceil(videoTiming.durationSec*fps);setVideoFps(fps);setTotalVideoFrames(count);setVideoTiming({...videoTiming,actualFps:fps,fpsSource:'user_supplied',timingReliable:true,isVFR:false,totalFrames:count,timestamps:Array.from({length:count},(_,i)=>i/fps),timeBase:'fps_derived',timingWarning:'使用者確認CFR時間假設；原始影格數與解碼精度未確認。'});setEvents({release:null,glove:null});setManualAnchor(null);setIsSelectingPoint(null);setTargetFrameSeek(0);setHasAnalyzed(false);setVideoLoadError(null);}}>確認 FPS</button></div>}
               </div>}
               {/* 2. 視角切換 */}
@@ -815,7 +827,8 @@ export default function App() {
                   gloveFrame={gloveFrame}
                   totalFrames={totalVideoFrames}
                   fps={videoFps}
-                  timestamps={videoTiming?.timestamps}
+                  timestamps={controlTimes}
+                  selectionOnly={selectionOnly}
                   isFpsEstimated={isFpsEstimated}
                   viewMode={cameraViewMode}
                   velocityKmh={velocityKmh}
@@ -826,7 +839,7 @@ export default function App() {
                   onCurrentFrameChange={(f) => setCurrentVideoFrame(f)}
                   sourceTiming={videoTiming}
                   events={events}
-                  onSetEvent={setEvent}
+                  onSetEvent={(name,event)=>setEvent(name,selectionOnly?{...event,sourceSpanSec:NaN,previewQuality:'unavailable'}:event)}
                   onPositionChange={point=>setCurrentViewKind(point.kind)}
                   spatialCalibration={matchedResult?.spatial_calibration}
                   onVideoElementReady={(el) => {
@@ -843,6 +856,21 @@ export default function App() {
                   manualPoint1={manualAnchor?.point1 || null}
                   manualPoint2={manualAnchor?.point2 || null}
                 />
+                {userVideoUrl && videoLoadStatus==='ready' && <FrameSlidersCard
+                  releaseFrame={events.release?.left ?? 0}
+                  gloveFrame={events.glove?.left ?? 0}
+                  totalVideoFrames={controlTimes.length}
+                  fps={videoFps}
+                  timestamps={controlTimes}
+                  timingConfirmed={sourceTimesValid}
+                  selectionOnly={selectionOnly}
+                  disabled={isAnalyzing || isAutoDetectingFrames}
+                  aiReleaseFrame={aiDetection?.releaseFrame}
+                  aiGloveFrame={aiDetection?.gloveFrame}
+                  onChangeReleaseFrame={markRelease}
+                  onChangeGloveFrame={markGlove}
+                  onSeekVideoFrame={setTargetFrameSeek}
+                />}
               </div>
 
               <div className="space-y-3">

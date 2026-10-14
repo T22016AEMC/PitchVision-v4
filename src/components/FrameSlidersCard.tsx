@@ -6,6 +6,8 @@ interface FrameSlidersCardProps {
   visibleEndFrame?: number;
   totalVideoFrames: number;
   fps?: number;
+  timingConfirmed?: boolean;
+  selectionOnly?: boolean;
   timestamps?: number[];
   aiReleaseFrame?: number | null;
   aiGloveFrame?: number | null;
@@ -21,7 +23,9 @@ export const FrameSlidersCard: React.FC<FrameSlidersCardProps> = ({
   gloveFrame,
   visibleEndFrame,
   totalVideoFrames,
-  fps = 30,
+  fps = NaN,
+  timingConfirmed = false,
+  selectionOnly = false,
   timestamps,
   aiReleaseFrame,
   aiGloveFrame,
@@ -32,10 +36,10 @@ export const FrameSlidersCard: React.FC<FrameSlidersCardProps> = ({
   onSeekVideoFrame,
 }) => {
   const maxAvailable = totalVideoFrames > 0 ? totalVideoFrames - 1 : 0;
-  const safeFps = fps > 0 ? fps : 30;
+  const safeFps = Number.isFinite(fps) && fps > 0 ? fps : NaN;
 
   const handleReleaseChange = (val: number) => {
-    if (disabled) return;
+    if (disabled || !Number.isFinite(val)) return;
     const clamped = Math.max(0, Math.min(val, maxAvailable));
     onChangeReleaseFrame(clamped);
     if (onSeekVideoFrame) {
@@ -44,7 +48,7 @@ export const FrameSlidersCard: React.FC<FrameSlidersCardProps> = ({
   };
 
   const handleGloveChange = (val: number) => {
-    if (disabled) return;
+    if (disabled || !Number.isFinite(val)) return;
     const clamped = Math.max(0, Math.min(val, maxAvailable));
     onChangeGloveFrame(clamped);
     if (onSeekVideoFrame) {
@@ -66,20 +70,20 @@ export const FrameSlidersCard: React.FC<FrameSlidersCardProps> = ({
     <div className={`bg-[#0b1329]/90 border border-slate-800/90 rounded-2xl p-4 shadow-lg transition-opacity ${disabled ? 'opacity-60 pointer-events-none' : ''}`}>
       {disabled && (
         <div className="mb-3 text-[11.5px] text-amber-300/90 bg-amber-950/30 border border-amber-500/20 rounded-lg px-3 py-1.5 flex items-center gap-1.5">
-          <span>💡 尚未上傳影片。請先上傳投球短片（支援 24/30/60/120 FPS），影片載入後即可獨立設定出手影格與進手套影格。</span>
+          <span>目前處理中，完成後可繼續調整。</span>
         </div>
       )}
 
       {/* Frame Status Overview */}
       <div className="mb-3.5 pb-2.5 border-b border-slate-800/70 flex flex-wrap items-center justify-between gap-2 text-xs">
         <div className="flex items-center gap-2">
-          <span className="text-slate-300 font-semibold">兩者獨立自定義：</span>
-          <span className="text-slate-400 font-mono text-[11px]">不受彼此互鎖限制，可各自自由拖曳或輸入精準影格</span>
+          <span className="text-slate-300 font-semibold">出手／進手套設定：</span>
+          <span className="text-slate-400 font-mono text-[11px]">{selectionOnly?'暫選時間位置，非已確認影格；確認 FPS 後重新選格':'兩個影格可獨立調整'}</span>
         </div>
         <div>
           {isOrderValid ? (
             <span className="text-emerald-400 font-mono font-medium text-[11.5px] bg-emerald-950/40 border border-emerald-500/30 px-2 py-0.5 rounded">
-              飛行間隔: {flightDiff} 幀 (約 {flightSec.toFixed(3)} 秒 @ {safeFps.toFixed(1)} FPS)
+              {timingConfirmed ? `飛行間隔：${flightDiff} 位置 · ${flightSec.toFixed(3)} 秒` : '時間資料待確認'}
             </span>
           ) : (
             <span className="text-amber-400 font-mono text-[11px] bg-amber-950/40 border border-amber-500/30 px-2 py-0.5 rounded">
@@ -92,17 +96,17 @@ export const FrameSlidersCard: React.FC<FrameSlidersCardProps> = ({
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
         {/* Left Column: 自定義出手影格 (Release Frame) - 完全獨立 */}
         <div className="space-y-2 bg-slate-900/50 p-3 rounded-xl border border-red-950/40">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap gap-2 items-center justify-between">
             <span className="text-red-400 font-bold text-xs sm:text-[13px] flex items-center gap-1.5">
               <span className="w-2.5 h-2.5 rounded-full bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.8)]"></span>
-              自定義出手影格 (Release)
+              {selectionOnly?'出手時間位置':'出手影格 F'}
             </span>
             <div className="flex items-center gap-1">
               <button
                 type="button"
                 onClick={() => handleReleaseChange(releaseFrame - 1)}
                 disabled={disabled || releaseFrame <= 0}
-                className="w-6 h-6 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-mono font-bold flex items-center justify-center disabled:opacity-40"
+                className="w-11 h-11 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-mono font-bold flex items-center justify-center disabled:opacity-40"
                 title="出手影格 -1 幀"
               >
                 -
@@ -119,7 +123,7 @@ export const FrameSlidersCard: React.FC<FrameSlidersCardProps> = ({
                 type="button"
                 onClick={() => handleReleaseChange(releaseFrame + 1)}
                 disabled={disabled || releaseFrame >= maxAvailable}
-                className="w-6 h-6 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-mono font-bold flex items-center justify-center disabled:opacity-40"
+                className="w-11 h-11 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-mono font-bold flex items-center justify-center disabled:opacity-40"
                 title="出手影格 +1 幀"
               >
                 +
@@ -135,7 +139,6 @@ export const FrameSlidersCard: React.FC<FrameSlidersCardProps> = ({
               max={maxAvailable}
               value={releaseFrame}
               onChange={(e) => handleReleaseChange(Number(e.target.value))}
-              onInput={(e) => handleReleaseChange(Number((e.target as HTMLInputElement).value))}
               className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-red-500 focus:outline-none"
             />
           </div>
@@ -153,17 +156,17 @@ export const FrameSlidersCard: React.FC<FrameSlidersCardProps> = ({
 
         {/* Right Column: 自定義進手套影格 (Glove Frame) - 完全獨立 */}
         <div className="space-y-2 bg-slate-900/50 p-3 rounded-xl border border-amber-950/40">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap gap-2 items-center justify-between">
             <span className="text-amber-400 font-bold text-xs sm:text-[13px] flex items-center gap-1.5">
               <span className="w-2.5 h-2.5 rounded-full bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.8)]"></span>
-              自定義進手套影格 (Glove)
+              {selectionOnly?'進手套時間位置':'進手套影格 F'}
             </span>
             <div className="flex items-center gap-1">
               <button
                 type="button"
                 onClick={() => handleGloveChange(gloveFrame - 1)}
                 disabled={disabled || gloveFrame <= 0}
-                className="w-6 h-6 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-mono font-bold flex items-center justify-center disabled:opacity-40"
+                className="w-11 h-11 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-mono font-bold flex items-center justify-center disabled:opacity-40"
                 title="進手套影格 -1 幀"
               >
                 -
@@ -180,7 +183,7 @@ export const FrameSlidersCard: React.FC<FrameSlidersCardProps> = ({
                 type="button"
                 onClick={() => handleGloveChange(gloveFrame + 1)}
                 disabled={disabled || gloveFrame >= maxAvailable}
-                className="w-6 h-6 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-mono font-bold flex items-center justify-center disabled:opacity-40"
+                className="w-11 h-11 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-mono font-bold flex items-center justify-center disabled:opacity-40"
                 title="進手套影格 +1 幀"
               >
                 +
@@ -196,7 +199,6 @@ export const FrameSlidersCard: React.FC<FrameSlidersCardProps> = ({
               max={maxAvailable}
               value={gloveFrame}
               onChange={(e) => handleGloveChange(Number(e.target.value))}
-              onInput={(e) => handleGloveChange(Number((e.target as HTMLInputElement).value))}
               className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-amber-400 focus:outline-none"
             />
           </div>
