@@ -22,16 +22,12 @@ export class VideoTimingService {
       if (detectedFps && detectedFps > 10 && detectedFps <= 250) fpsSource = 'measured_rvfc';
       else detectedFps = null;
     }
-    if (!detectedFps) detectedFps = 30;
-    const totalFrames = Math.max(15, Math.round(durationSec * detectedFps));
-    const timestamps: number[] = [];
-    const frameDt = 1.0 / detectedFps;
-    for (let i = 0; i < totalFrames; i++) {
-      timestamps.push(Number((i * frameDt).toFixed(4)));
-    }
+    // A playback-cadence estimate cannot enumerate source samples. Until the
+    // user confirms CFR FPS there is no source index or synthetic source PTS.
+    const totalFrames=0,timestamps:number[]=[];
 
     return {
-      actualFps: detectedFps,
+      actualFps: NaN,
       timingReliable: false,
       seekPrecision: 'estimated',
       timingWarning: '無可用容器PTS：此時間軸為估計，請指定可信FPS；未確認前禁止自動事件與物理分析。',

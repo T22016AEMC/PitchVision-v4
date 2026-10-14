@@ -12,3 +12,5 @@ execFileSync(process.execPath,['tests/v41-science.mjs'],{stdio:'inherit'});
 execFileSync(process.execPath,['tests/v411.mjs'],{stdio:'inherit'});
 
 execFileSync(process.execPath,['tests/v421.mjs'],{stdio:'inherit'});
+
+execFileSync(process.execPath,['tests/v422.mjs'],{stdio:'inherit'});

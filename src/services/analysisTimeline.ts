@@ -16,16 +16,17 @@ export interface AnalysisTimeline {length:number;get:(index:number)=>TimePositio
 // Fine-operation positions are a regular 90 Hz grid. Original PTS remain separately
 // available in source mode; never insert originals into this grid's step count.
 export function createFineGridTimeline(times:readonly number[],fps:number,assumed=false):AnalysisTimeline {
-  if(times.length<2||fps>=90-1e-6)return createAnalysisTimeline(times,fps,false,assumed);
+  if(times.length<2||fps>=90-0.001)return createAnalysisTimeline(times,fps,false,assumed);
   const first=times[0],last=times.at(-1)!,length=Math.floor((last-first)*90+1e-8)+1;
   if(!Number.isSafeInteger(length)||length>2_000_000_000)throw Error('時間軸超出支援範圍；請使用原始影格');
   return {length,get:i=>describePosition(times,first+Math.max(0,Math.min(length-1,Math.round(i)))/90,assumed),nearest:t=>Math.max(0,Math.min(length-1,Math.round((t-first)*90)))};
 }
 export function createAnalysisTimeline(times:readonly number[],fps:number,fine:boolean,assumed=false):AnalysisTimeline {
+  if(!times.length)return{length:0,get:()=>({timeSec:0,kind:'cfr_assumed',left:0,right:0,alpha:0}),nearest:()=>0};
   const source=(i:number)=>({timeSec:times[i],kind:assumed?'cfr_assumed' as const:'original' as const,left:i,right:i,alpha:0});
   const lower=(a:ArrayLike<number>,x:number)=>{let lo=0,hi=a.length;while(lo<hi){const mid=(lo+hi)>>1;if(a[mid]<x)lo=mid+1;else hi=mid;}return lo;};
   const nearestSource=(t:number)=>{const i=Math.min(times.length-1,lower(times,t));return i>0&&Math.abs(times[i-1]-t)<Math.abs(times[i]-t)?i-1:i;};
-  if(!fine||fps>=90-1e-6||times.length<2)return{length:times.length,get:source,nearest:nearestSource};
+  if(!fine||fps>=90-0.001||times.length<2)return{length:times.length,get:source,nearest:nearestSource};
   const first=times[0],last=times.at(-1)!,gridCount=Math.floor((last-first)*90)+1;
   if(!Number.isSafeInteger(gridCount)||gridCount+times.length>2_000_000_000)throw Error('時間軸長度超出支援範圍，請使用原始模式');
   const sourceMerged=new Int32Array(times.length),coincident:number[]=[];
@@ -61,7 +62,7 @@ export function describePosition(times: readonly number[], time: number, assumed
 }
 export function buildAnalysisTimeline(times: readonly number[], fps: number, fine: boolean, assumed=false): TimePosition[] {
   if(!times.length)return [];
-  if(!fine||fps>=90-1e-6)return times.map((t,i)=>({timeSec:t,kind:assumed?'cfr_assumed':'original',left:i,right:i,alpha:0}));
+  if(!fine||fps>=90-0.001)return times.map((t,i)=>({timeSec:t,kind:assumed?'cfr_assumed':'original',left:i,right:i,alpha:0}));
   // Union: a 90 Hz grid AND every original PTS, never replace/downsample the source.
   const grid:number[]=[];
   const first=times[0],last=times.at(-1)!;
@@ -83,6 +84,12 @@ export function selectEvent(point:TimePosition,times:readonly number[],quality?:
 }
 export function eventAnalysisView(times:readonly number[],events:SelectedEvents){
   if(!events.release||!events.glove||events.glove.timeSec<=events.release.timeSec)throw Error('請設定進手套晚於出手的兩個事件時間');
+  if(times.length<2||times.some((t,i)=>!Number.isFinite(t)||t<0||(i>0&&t<=times[i-1])))throw Error('來源PTS無效');
+  for(const event of [events.release,events.glove]){
+    if(!Number.isFinite(event.timeSec)||event.timeSec<times[0]||event.timeSec>times.at(-1)!)throw Error('事件時間超出來源範圍');
+    const canonical=describePosition(times,event.timeSec,event.kind==='cfr_assumed');
+    if(canonical.left!==event.left||canonical.right!==event.right)throw Error('事件時間與來源支持影格不一致');
+  }
   const releaseFrame=events.release.left;
   // Keep original interval counts for uncertainty; do not count the right support image as a new sample.
   const gloveFrame=events.glove.left>releaseFrame?events.glove.left:events.glove.right;
@@ -91,5 +98,8 @@ export function eventAnalysisView(times:readonly number[],events:SelectedEvents)
   // Only event interface slots change; this array is NEVER decoded or used as observation samples.
   timestamps[releaseFrame]=events.release.timeSec;
   timestamps[gloveFrame]=events.glove.timeSec;
-  return {releaseFrame,gloveFrame,timestamps,flightSeconds:events.glove.timeSec-events.release.timeSec};
+  if(timestamps.some((t,i)=>i>0&&t<=timestamps[i-1]))throw Error('舊引擎事件時間橋不單調，停止傳遞錯誤時間');
+  // This bridge supplies event slots to the unchanged legacy model only. It is
+  // not an observed/source timeline and must never reach video decoding/tracking.
+  return {releaseFrame,gloveFrame,timestamps,engineTimingBridge:timestamps,sourceTimestamps:times,eventTimes:{releaseTimeSec:events.release.timeSec,gloveTimeSec:events.glove.timeSec},flightSeconds:events.glove.timeSec-events.release.timeSec};
 }

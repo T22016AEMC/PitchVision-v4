@@ -1,3 +1,4 @@
+import {formatSourceFps} from './services/sourceTiming';
 import { SelectedEvents,SelectedEvent,PositionKind,describePosition,selectEvent,eventAnalysisView } from './services/analysisTimeline';
 import { hasUsableSourceTimes, manualAnalysisReason } from './services/manualAnalysisReadiness';
 import { ScientificInfoPanel } from './components/ScientificInfoPanel';
@@ -62,10 +63,11 @@ export default function App() {
 
   // Video and Frame states
   const [totalVideoFrames, setTotalVideoFrames] = useState<number>(0);
-  const [videoFps, setVideoFps] = useState<number>(30);
+  const [videoFps, setVideoFps] = useState<number>(NaN);
   const [videoTiming, setVideoTiming] = useState<(VideoTiming & { width: number; height: number }) | null>(null);
   const [videoLoadStatus, setVideoLoadStatus] = useState<VideoLoadStatus>('idle');
   const [videoLoadError, setVideoLoadError] = useState<string | null>(null);
+  const videoLoadGeneration=useRef(0);
 
   const [aiDetection, setAiDetection] = useState<FrameDetectionResult | null>(null);
   const [autoDetectResult, setAutoDetectResult] = useState<AutoFrameDetectionOutput | null>(null);
@@ -224,8 +226,10 @@ export default function App() {
     inputEl.value = '';
 
     if (!file) return;
+    const loadId=++videoLoadGeneration.current;
 
     setVideoLoadError(null);
+    setVideoFps(NaN);setTotalVideoFrames(0);setVideoFileName('');setCurrentVideoFrame(0);setTargetFrameSeek(null);setVisibleEndFrame(0);
     setEvents({release:null,glove:null});setAnalyzedEvents(null);setCompletedResult(null);setCurrentViewKind('original');setUserVideoUrl(null);setVideoTiming(null);setRightColumnTab('metrics');setCameraGeometry(null);setReferencePoints([null,null,null,null]);setReferenceConfirmed(false);
     setHasAnalyzed(false);
     setAiDetection(null);
@@ -239,15 +243,16 @@ export default function App() {
     try {
       const loadResult = await VideoLoadService.loadVideoFile(
         file,
-        (status) => setVideoLoadStatus(status)
+        (status) => {if(loadId===videoLoadGeneration.current)setVideoLoadStatus(status);}
       );
 
+      if(loadId!==videoLoadGeneration.current){VideoLoadService.revokePreviousObjectUrl(loadResult.objectUrl);return;}
       activeObjectUrlRef.current = loadResult.objectUrl;
 
       // 單一梯次更新所有影片狀態，確保 PitchVideoPlayer 第一次掛載即擁有完整 metadata 與有效 Object URL
       setVideoFileName(loadResult.fileName);
       setTotalVideoFrames(loadResult.totalFrames);
-      setVideoFps(loadResult.actualFps);setManualFpsDraft(String(loadResult.actualFps));
+      setVideoFps(loadResult.actualFps);setManualFpsDraft(Number.isFinite(loadResult.actualFps)?String(loadResult.actualFps):'');
       setVideoTiming({
         ...loadResult.timing,
         durationSec: loadResult.durationSec,
@@ -268,6 +273,7 @@ export default function App() {
       setUserVideoUrl(loadResult.objectUrl);
       setVideoLoadStatus('ready');
     } catch (err: any) {
+      if(loadId!==videoLoadGeneration.current)return;
       setVideoLoadStatus('failed');
       setVideoLoadError(err?.message || '影片載入失敗，請確認格式為 MP4 / MOV / WebM');
     }
@@ -389,7 +395,7 @@ export default function App() {
     let sparseResult = null;
     if (useExistingTracking && videoElementRef.current) {
       setAnalysisProgress(20);
-      setAnalysisStepText(`【步驟 2/6】執行 ${videoFps.toFixed(1)} FPS 差分運動偵測與時間走廊追蹤...`);
+      setAnalysisStepText(`【步驟 2/6】執行 ${formatSourceFps(videoFps)} FPS 差分運動偵測與時間走廊追蹤...`);
       try {
         sparseResult = await trackBaseballSparse(videoElementRef.current, {
           releaseFrame,
@@ -486,7 +492,7 @@ export default function App() {
     }
 
     if(inputGeneration!==analysisInputGeneration.current){setVideoLoadError('分析期間事件或設定已變更，請重新分析');return;}
-    const computed=matchPitchData(velocityKmh,flightSeconds,selectedPitchType,cameraViewMode,PITCH_DATABASE,releaseFrame,gloveFrame,biometrics,validationResult.videoTrack,validationResult.metrics,conf,videoFps,eventView!.timestamps,strictPitchTypeMode,allowCrossTypeFallback,isManualUsed,autoDetectResult?.confidence,analysisGeometry||undefined);
+    const computed=matchPitchData(velocityKmh,flightSeconds,selectedPitchType,cameraViewMode,PITCH_DATABASE,releaseFrame,gloveFrame,biometrics,validationResult.videoTrack,validationResult.metrics,conf,videoFps,eventView!.engineTimingBridge,strictPitchTypeMode,allowCrossTypeFallback,isManualUsed,autoDetectResult?.confidence,analysisGeometry||undefined);
     // Time-source presentation only; confidence formulas and numerical scores stay unchanged.
     computed.confidence_scores.quality_notes=computed.confidence_scores.quality_notes.map(note=>note.startsWith('飛行時間 ')?`事件時差 ${flightSeconds.toFixed(6)}s；品質評分沿用原始影格跨度，不把90Hz位置當觀測` : note);
     setCompletedResult(computed);setAnalyzedEvents(events);
@@ -498,7 +504,7 @@ export default function App() {
   };
 
   // Physical calculations prioritizing timestamps[] over frame / fps
-  const {velocityKmh,flightSeconds,flightFrames}=useMemo(()=>eventView?calculateVelocity(eventView.releaseFrame,eventView.gloveFrame,videoFps,analysisDistance,eventView.timestamps):{velocityKmh:0,flightSeconds:0,flightFrames:0},[eventView,videoFps,analysisDistance]);
+  const {velocityKmh,flightSeconds,flightFrames}=useMemo(()=>eventView?calculateVelocity(eventView.releaseFrame,eventView.gloveFrame,videoFps,analysisDistance,eventView.engineTimingBridge):{velocityKmh:0,flightSeconds:0,flightFrames:0},[eventView,videoFps,analysisDistance]);
 
   // Match result with PitchVision Synthetic Physics Reference Dataset
   const matchedResult = hasAnalyzed ? completedResult : null;
@@ -562,7 +568,7 @@ export default function App() {
             <div className="flex items-center gap-2">
               <h1 className="text-base sm:text-lg font-black text-white tracking-tight flex items-center gap-2">
                 <span className="text-transparent bg-clip-text bg-gradient-to-r from-orange-400 via-amber-300 to-cyan-400">
-                  PitchVision V4.2.1
+                  PitchVision V4.2.2
                 </span>
                 <span className="text-xs sm:text-sm font-semibold text-slate-300 hidden md:inline">
                   投球物理量測與位移反查系統
@@ -610,7 +616,7 @@ export default function App() {
                   <span>
                     FPS:{' '}
                     <strong className="text-white font-mono">
-                      {videoFps.toFixed(1)}
+                      {formatSourceFps(videoFps)}
                     </strong>
                     {isFpsEstimated && (
                       <span className="ml-1 text-[10px] text-amber-400 font-mono">(FPS ESTIMATED)</span>
@@ -665,8 +671,10 @@ export default function App() {
                         <div className="text-xs font-medium text-slate-300">
                           {isVideoLoaded ? (
                             <span className="text-emerald-400 font-semibold flex items-center gap-1 justify-center">
-                              <CheckCircle className="w-3.5 h-3.5" /> 已就緒：{videoFileName} ({totalVideoFrames} 影格 @ {videoFps.toFixed(1)} FPS)
+                              <CheckCircle className="w-3.5 h-3.5" /> 已就緒：{videoFileName} ({totalVideoFrames} {videoTiming?.timeBase==='timestamp'?'來源影格':'CFR時間位置（非實測格數）'} @ {formatSourceFps(videoFps)} FPS)
                             </span>
+                          ) : userVideoUrl ? (
+                            <span>影片已載入：{videoFileName}；FPS未知，請確認時間資訊。</span>
                           ) : (
                             <span>點擊或拖曳投球影片至此（上傳後單次流程立即初始化並顯示）</span>
                           )}
@@ -689,7 +697,7 @@ export default function App() {
 
               <PitcherSetupCard biometrics={biometrics} onChange={setBiometrics} recomputeBiometrics={computePitcherBiometrics}/>
               {videoTiming&&!sourceTimesValid&&<div id="timing-status" className="text-xs rounded border border-amber-500/40 p-3">
-                FPS {videoFps.toFixed(4)} / {videoTiming.fpsSource} / {videoTiming.isVFR?'VFR':'CFR'} / {videoTiming.timingReliable?'時間表已取得':'時間未確認'}<br/>{videoTiming.timingWarning}
+                FPS {formatSourceFps(videoFps)} / {videoTiming.fpsSource} / {videoTiming.isVFR?'VFR':'CFR'} / {videoTiming.timingReliable?'時間表已取得':'時間未確認'}<br/>{videoTiming.timingWarning}
                 {!sourceTimesValid&&<div><label>指定可信FPS（CFR假設）<input id="manual-fps" type="number" min="1" max="1000" step="0.001" value={manualFpsDraft} onChange={e=>setManualFpsDraft(e.target.value)}/></label><button id="confirm-manual-fps" onClick={()=>{const fps=Number(manualFpsDraft);if(!Number.isFinite(fps)||fps<=0||fps>1000){setVideoLoadError('FPS須為1至1000的有效數值');return;}const count=Math.ceil(videoTiming.durationSec*fps);setVideoFps(fps);setTotalVideoFrames(count);setVideoTiming({...videoTiming,actualFps:fps,fpsSource:'user_supplied',timingReliable:true,isVFR:false,totalFrames:count,timestamps:Array.from({length:count},(_,i)=>i/fps),timeBase:'fps_derived',timingWarning:'使用者確認CFR時間假設；原始影格數與解碼精度未確認。'});setEvents({release:null,glove:null});setManualAnchor(null);setIsSelectingPoint(null);setTargetFrameSeek(0);setHasAnalyzed(false);setVideoLoadError(null);}}>確認 FPS</button></div>}
               </div>}
               {/* 2. 視角切換 */}
@@ -1089,7 +1097,7 @@ export default function App() {
                 </span>
               </div>
 
-              {hasAnalyzed&&analyzedEvents&&<p id="event-time-provenance" data-events={JSON.stringify(analyzedEvents)} className="text-xs text-amber-200 mb-3">出手 {analyzedEvents.release?.timeSec.toFixed(6)}s（{analyzedEvents.release?.kind==='interpolated'?'推算':analyzedEvents.release?.kind==='cfr_assumed'?'CFR假設':'原始'}）→進手套 {analyzedEvents.glove?.timeSec.toFixed(6)}s（{analyzedEvents.glove?.kind==='interpolated'?'推算':analyzedEvents.glove?.kind==='cfr_assumed'?'CFR假設':'原始'}）。事件精度仍受原始間距 {Math.max(analyzedEvents.release?.sourceSpanSec||0,analyzedEvents.glove?.sourceSpanSec||0).toFixed(4)}s 與遮蔽限制；補幀不增加真觀測或旋轉量測精度。</p>}
+              {hasAnalyzed&&analyzedEvents&&<p id="event-time-provenance" data-engine-flight-seconds={matchedResult?.flight_time_sec} data-events={JSON.stringify(analyzedEvents)} className="text-xs text-amber-200 mb-3">出手 {analyzedEvents.release?.timeSec.toFixed(6)}s（{analyzedEvents.release?.kind==='interpolated'?'推算':analyzedEvents.release?.kind==='cfr_assumed'?'CFR假設':'原始'}）→進手套 {analyzedEvents.glove?.timeSec.toFixed(6)}s（{analyzedEvents.glove?.kind==='interpolated'?'推算':analyzedEvents.glove?.kind==='cfr_assumed'?'CFR假設':'原始'}）。事件精度仍受原始間距 {Math.max(analyzedEvents.release?.sourceSpanSec||0,analyzedEvents.glove?.sourceSpanSec||0).toFixed(4)}s 與遮蔽限制；補幀不增加真觀測或旋轉量測精度。</p>}
               {rightColumnTab === 'metrics' ? (
                 <MetricsPanel compact
                   result={matchedResult || undefined}

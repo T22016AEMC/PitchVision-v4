@@ -1,4 +1,4 @@
-# PitchVision V4.2.1
+# PitchVision V4.2.2
 
 在既有 V4 Baseline 上改善影片時間、追蹤證據、條件式幾何／物理反演與操作排列；保留兩份原始資料庫、原手動旋轉模型與部署架構。科學能力仍有未通過項目，見 V41_ACCEPTANCE.md。
 
@@ -8,7 +8,11 @@ V4.2.1修復滑桿／操作索引同步、同位置重新預覽與原尺寸補�
 
 ## 開發與驗證
 
+V4.2.2沿用9c13802，嚴格驗證每次上傳的PTS／樣本數與FPS；未知時間表不再預設30FPS，需人工明確確認CFR假設。來源PTS與事件時間橋分離，滑桿只有一套Pointer／鍵盤控制路徑。UI配置、播放器尺寸、科學公式及原尺寸運動插值算法均不變。詳見V422_ACCEPTANCE.md。
+
 需要 Node.js 22+、Corepack、pnpm 11.4.0。
+
+跨FPS測試：先verify／build與4175預覽，再`node tests/generate-fps-fixtures.mjs`，用Chrome的WebCodecs實際產生30／60／90／120／29.97／VFR AVC MP4、逐格視覺編號及已知PTS。素材與manifest僅放忽略的test-results/fps-fixtures，不進正式資源。`pnpm run test:e2e`驗證指定交替上傳、全部510合成原始畫面、滑桿與實際引擎時間差，再跑兩片實片全部318PTS及原手動分析／回退。BASE_URL可指向原公開網址，無須重新產生素材；測試程式不依影片名稱提供分析答案。
 
 ```sh
 corepack enable

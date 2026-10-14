@@ -1,7 +1,7 @@
 {
   "name": "pitchvision-v4-baseline",
   "private": true,
-  "version": "4.2.1",
+  "version": "4.2.2",
   "type": "module",
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",
@@ -10,7 +10,7 @@
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
     "verify": "tsc --noEmit && node tests/regression.mjs",
-    "test:e2e": "node tests/browser-v421.mjs"
+    "test:e2e": "node tests/browser-v422.mjs"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

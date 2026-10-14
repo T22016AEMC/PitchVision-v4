@@ -55,3 +55,8 @@ Actions Secret RENDER_DEPLOY_HOOK已設定並於前次b41c312證明能推送觸�
 低解析度運動估計、原RGBA全尺寸合成已實際輸出720×1280；固定90Hz操作索引、Pointer Capture、單一TimePosition、同位置重試revision與過期请求保護。兩片原始與推算事件分析、重新分析、換片、Worker失敗回退、未知PTS手動FPS確認均通過本地Browser E2E；實際觸控模擬與桌面全寬滑桿另驗證成功。詳細數值／限制見V421_ACCEPTANCE.md。TypeScript、Build、256＋56＋70＋830回歸通過，30科學／資料檔案雜湊不變。
 
 保留原Render Static Site、Workflow／Hook；推送後的公開验收證據另記忽略的test-results/V421_DELIVERY.md，不把本地測試當公開部署或真手機驗收。測試影片不提交。
+# 2026-10-14 V4.2.2
+
+基準9c13802。來源PTS／STSZ驗證、未知FPS不默認30、換片generation、单一Pointer／鍵盤滑桿、不可變PTS与單調事件橋；UI尺寸／科學模型／原像素插值／部署不變。WebCodecs實際編碼30／60／90／120／29.97／VFR共510影格，完整影像標記与PTS驗證及指定交替上傳通過，實際引擎事件差可核對。兩片電腦實片318PTS已逐一定位；手機原30FPS未取得，不与24FPS檔案混為同一序列。
+
+測試抓到原生range近距離點擊不更新，改單一控制器重測通過；未知PTS空表在FPS確認時undefined游標崩潰已修，原WebM回退E2E重跑通過。舊測試保留。TypeScript／Build、256+56+70+830+42單元／回歸通過，30份科學／資料文件SHA不變。詳見V422_ACCEPTANCE.md；公開部署與最後完整E2E另記忽略的test-results/V422_DELIVERY.md，不假稱手機實機或精度驗證。

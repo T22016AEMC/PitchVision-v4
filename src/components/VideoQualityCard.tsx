@@ -1,3 +1,4 @@
+import {formatSourceFps} from '../services/sourceTiming';
 import React from 'react';
 import { VideoQualityAssessment } from '../services/videoMetadataService';
 import { AlertTriangle, CheckCircle2, Video, Film, Eye, ShieldAlert } from 'lucide-react';
@@ -39,10 +40,10 @@ export const VideoQualityCard: React.FC<VideoQualityCardProps> = ({
         <div className="bg-slate-950/70 p-2 rounded-lg border border-slate-800/80">
           <div className="text-[10px] text-slate-400">時間表幀率 (actualFPS)</div>
           <div className={`font-mono font-bold text-sm ${isLowFps ? 'text-amber-400' : 'text-cyan-400'}`}>
-            {actualFps} FPS
+            {formatSourceFps(actualFps)} FPS
           </div>
           <div className="text-[9.5px] text-slate-500">
-            {isLowFps ? '低速手機直拍' : actualFps >= 60 ? '高速流暢' : '標準幀率'}
+            {!Number.isFinite(actualFps)||actualFps<=0?'未知／待確認':isLowFps ? '低速手機直拍' : actualFps >= 60 ? '高速流暢' : '標準幀率'}
           </div>
         </div>
 

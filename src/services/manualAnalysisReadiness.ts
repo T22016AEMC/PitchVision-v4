@@ -2,6 +2,7 @@ import { VideoTiming } from '../types';
 
 export function hasUsableSourceTimes(timing: VideoTiming | null | undefined): boolean {
   if (!timing || !['container_timestamps', 'container_metadata', 'user_supplied'].includes(timing.fpsSource)) return false;
+  if(!Number.isFinite(timing.actualFps)||timing.actualFps<=0||timing.totalFrames!==timing.timestamps.length)return false;
   return timing.timestamps.length >= 2 && timing.timestamps.every((t, i, a) => Number.isFinite(t) && t >= 0 && (!i || t > a[i - 1]));
 }
 

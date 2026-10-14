@@ -1,3 +1,4 @@
+import {normalizeSourceTiming} from './sourceTiming';
 import { readMp4Timing } from './mp4Timing';
 import { VideoTiming } from '../types';
 import { VideoTimingService } from './videoTimingService';
@@ -157,7 +158,8 @@ export class VideoLoadService {
     // 4. 探測真實 FPS 與時間戳
     let timing: VideoTiming;
     try {
-      timing = await readMp4Timing(file) || await VideoTimingService.probeVideoTiming(probeVideo);
+      const parsed=await readMp4Timing(file);
+      timing = parsed?normalizeSourceTiming(parsed):await VideoTimingService.probeVideoTiming(probeVideo);
       if (timing.timingReliable && Math.abs(timing.durationSec - durationSec) > Math.max(0.15, durationSec * 0.05)) {
         timing.timingReliable = false;
         timing.timingWarning = '容器PTS與播放器時長不一致，請人工確認時間。';
@@ -167,30 +169,30 @@ export class VideoLoadService {
       timing.timingWarning = (error instanceof Error ? error.message : '時間表解析失敗') + '；請指定可信FPS。';
     }
     const actualFps = timing.actualFps;
-    const isFpsEstimated = timing.fpsSource === 'estimated';
+    const isFpsEstimated = !Number.isFinite(actualFps) || timing.fpsSource === 'estimated';
     const totalFrames = timing.totalFrames;
 
     // 5. 評估影片品質
     const qualityAssessment = VideoMetadataService.assessVideoQuality(
       width,
       height,
-      actualFps,
+      Number.isFinite(actualFps)?actualFps:0,
       durationSec
     );
     if (isFpsEstimated) {
       qualityAssessment.warnings = [
         ...qualityAssessment.warnings,
-        `容器未提供明確幀率標籤，目前使用估計幀率 (${actualFps} FPS [FPS ESTIMATED])`
+        '未取得完整來源時間表，FPS未知；需明確確認CFR假設，不以推算位置當真實影格'
       ];
     }
 
     // 6. 預設初始檢視區間 (標示為 Reference Estimate，非 AI Detection)
-    const initialReleaseFrame = Math.min(
+    const initialReleaseFrame = totalFrames?Math.min(
       Math.round(totalFrames * 0.25),
       Math.max(2, Math.round(actualFps * 0.35))
-    );
-    const expectedFlightFrames = Math.max(5, Math.round(actualFps * 0.48));
-    const initialGloveFrame = Math.min(totalFrames - 1, initialReleaseFrame + expectedFlightFrames);
+    ):0;
+    const expectedFlightFrames = totalFrames?Math.max(5, Math.round(actualFps * 0.48)):0;
+    const initialGloveFrame = Math.max(0,Math.min(totalFrames - 1, initialReleaseFrame + expectedFlightFrames));
 
     // 清理臨時 probe element (保留 objectUrl 給主播放器)
     probeVideo.removeAttribute('src');

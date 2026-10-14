@@ -26,6 +26,7 @@ export function parseMoovTiming(buffer:ArrayBuffer):VideoTiming|null {
       if(!delta||pts.length+count>300000)throw Error('影片影格表過大或時間不合法，請縮短影片');
       for(let j=0;j<count;j++){pts.push(dts);deltas.push(delta);dts+=delta;}
     }
+    const stsz=child(v,stbl,'stsz');if(stsz&&u32(v,stsz.data+8,stsz)!==pts.length)throw Error('MP4樣本數與來源時間表不一致');
     const ctts=child(v,stbl,'ctts');if(ctts){let index=0;for(let i=0,n=u32(v,ctts.data+4,ctts);i<n;i++){
       const count=u32(v,ctts.data+8+i*8,ctts),p=ctts.data+12+i*8;u32(v,p,ctts);
       const offset=v.getUint8(ctts.data)===1?v.getInt32(p):v.getUint32(p);
