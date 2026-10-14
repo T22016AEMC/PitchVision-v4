@@ -1,6 +1,6 @@
 import {formatSourceFps} from './services/sourceTiming';
 import { SelectedEvents,SelectedEvent,PositionKind,describePosition,selectEvent,eventAnalysisView } from './services/analysisTimeline';
-import { hasUsableSourceTimes, manualAnalysisReason } from './services/manualAnalysisReadiness';
+import { hasUsableSourceTimes, manualAnalysisReason, confirmCfrTiming } from './services/manualAnalysisReadiness';
 import { ScientificInfoPanel } from './components/ScientificInfoPanel';
 import { CameraGeometry, ImagePoint, calibrateGroundReference, estimateImageLines } from './services/cameraGeometry';
 import { VideoTimingService } from './services/videoTimingService';
@@ -25,7 +25,6 @@ import {
   MatchResult
 } from './types';
 import { computePitcherBiometrics, DEFAULT_PITCHER_BIOMETRICS } from './spatialCalibration';
-import { FrameSlidersCard } from './components/FrameSlidersCard';
 import { PitchVideoPlayer } from './components/PitchVideoPlayer';
 import { PitchVisualizer } from './components/PitchVisualizer';
 import { MetricsPanel } from './components/MetricsPanel';
@@ -147,7 +146,7 @@ export default function App() {
   const [isDbModalOpen, setIsDbModalOpen] = useState<boolean>(false);
   const [isCodeModalOpen, setIsCodeModalOpen] = useState<boolean>(false);
 
-  const isVideoLoaded = Boolean(userVideoUrl && totalVideoFrames > 0 && videoLoadStatus === 'ready');
+  const isVideoLoaded = Boolean(userVideoUrl && videoLoadStatus === 'ready');
 
   const sourceTimesValid=useMemo(()=>hasUsableSourceTimes(videoTiming),[videoTiming]);
   const analysisBlockReason=manualAnalysisReason(isVideoLoaded,isAnalyzing,isAutoDetectingFrames,videoTiming,releaseFrame,gloveFrame,sourceTimesValid)||(eventView?null:'請在影片下方設定出手與進手套時間。');
@@ -710,7 +709,19 @@ export default function App() {
               {videoTiming&&<div id="timing-status" className="text-xs rounded border border-amber-500/40 p-3">
                 <p>{sourceTimesValid ? `FPS ${formatSourceFps(videoFps)} · ${videoTiming.timeBase==='timestamp'?'已確認':'使用者確認（CFR假設）'}` : '時間未確認；仍可播放與暫選時間位置，定量分析需確認 FPS。'}</p>
                 <details className="mt-2 text-slate-400"><summary className="cursor-pointer">進階時間資訊</summary><p className="mt-2">來源：{videoTiming.fpsSource} · {videoTiming.isVFR?'VFR':'CFR'} · 時間基準：{videoTiming.timeBase} · {videoTiming.timingReliable?'時間表已取得':'時間未確認'} · 來源位置數：{videoTiming.timestamps.length}</p><p>{videoTiming.timingWarning}</p></details>
-                {!sourceTimesValid&&<div><label>指定可信FPS（CFR假設）<input id="manual-fps" type="number" min="1" max="1000" step="0.001" value={manualFpsDraft} onChange={e=>setManualFpsDraft(e.target.value)}/></label><button id="confirm-manual-fps" onClick={()=>{const fps=Number(manualFpsDraft);if(!Number.isFinite(fps)||fps<=0||fps>1000){setVideoLoadError('FPS須為1至1000的有效數值');return;}const count=Math.ceil(videoTiming.durationSec*fps);setVideoFps(fps);setTotalVideoFrames(count);setVideoTiming({...videoTiming,actualFps:fps,fpsSource:'user_supplied',timingReliable:true,isVFR:false,totalFrames:count,timestamps:Array.from({length:count},(_,i)=>i/fps),timeBase:'fps_derived',timingWarning:'使用者確認CFR時間假設；原始影格數與解碼精度未確認。'});setEvents({release:null,glove:null});setManualAnchor(null);setIsSelectingPoint(null);setTargetFrameSeek(0);setHasAnalyzed(false);setVideoLoadError(null);}}>確認 FPS</button></div>}
+                {!sourceTimesValid&&<div><label>指定可信FPS（CFR假設）<input id="manual-fps" type="number" min="1" max="1000" step="0.001" value={manualFpsDraft} onChange={e=>setManualFpsDraft(e.target.value)}/></label><button id="confirm-manual-fps" disabled={isAnalyzing||isAutoDetectingFrames} onClick={()=>{
+                  try {
+                    const confirmed=confirmCfrTiming(videoTiming,Number(manualFpsDraft),events);
+                    setVideoTiming(confirmed.timing);setVideoFps(confirmed.timing.actualFps);setTotalVideoFrames(confirmed.timing.totalFrames);
+                    setEvents(confirmed.events);setVisibleEndFrame(confirmed.events.glove?.right??0);
+                    setManualAnchor(null);setIsSelectingPoint(null);setAiDetection(null);setAutoDetectResult(null);
+                    setVideoTrack([]);setVideoMetrics(null);setConfidenceScores(null);setAnalyzedEvents(null);setCompletedResult(null);
+                    const cursor=videoElementRef.current?.currentTime??0;
+                    const frame=describePosition(confirmed.timing.timestamps,Math.min(cursor,confirmed.timing.timestamps.at(-1)!),true).left;
+                    setTargetFrameSeek(frame);setCurrentVideoFrame(frame);setCurrentViewKind('cfr_assumed');
+                    setHasAnalyzed(false);setVideoLoadError(null);
+                  } catch(error) {setVideoLoadError(error instanceof Error?error.message:'FPS 確認失敗，請檢查時間資訊。');}
+                }}>確認 FPS</button></div>}
               </div>}
               {/* 2. 視角切換 */}
               <div>
@@ -856,21 +867,7 @@ export default function App() {
                   manualPoint1={manualAnchor?.point1 || null}
                   manualPoint2={manualAnchor?.point2 || null}
                 />
-                {userVideoUrl && videoLoadStatus==='ready' && <FrameSlidersCard
-                  releaseFrame={events.release?.left ?? 0}
-                  gloveFrame={events.glove?.left ?? 0}
-                  totalVideoFrames={controlTimes.length}
-                  fps={videoFps}
-                  timestamps={controlTimes}
-                  timingConfirmed={sourceTimesValid}
-                  selectionOnly={selectionOnly}
-                  disabled={isAnalyzing || isAutoDetectingFrames}
-                  aiReleaseFrame={aiDetection?.releaseFrame}
-                  aiGloveFrame={aiDetection?.gloveFrame}
-                  onChangeReleaseFrame={markRelease}
-                  onChangeGloveFrame={markGlove}
-                  onSeekVideoFrame={setTargetFrameSeek}
-                />}
+
               </div>
 
               <div className="space-y-3">
