@@ -1,5 +1,5 @@
 import {formatSourceFps} from './services/sourceTiming';
-import { SelectedEvents,SelectedEvent,PositionKind,describePosition,selectEvent,eventAnalysisView } from './services/analysisTimeline';
+import { SelectedEvents,SelectedEvent,PositionKind,describePosition,selectEvent,eventAnalysisView,sourceIndexAt } from './services/analysisTimeline';
 import { hasUsableSourceTimes, manualAnalysisReason, confirmCfrTiming } from './services/manualAnalysisReadiness';
 import { ScientificInfoPanel } from './components/ScientificInfoPanel';
 import { CameraGeometry, ImagePoint, calibrateGroundReference, estimateImageLines } from './services/cameraGeometry';
@@ -153,6 +153,9 @@ export default function App() {
 
   const sourceTimesValid=useMemo(()=>hasUsableSourceTimes(videoTiming),[videoTiming]);
   const analysisHasSourceFrames=sourceTimesValid&&!eventView?.eventOnly;
+  // Count only enumerated original PTS, never the legacy event-only bridge.
+  const originalFlightFrames=sourceTimesValid&&videoTiming?.timeBase==='timestamp'&&events.release&&events.glove
+    ?videoTiming.timestamps.filter(t=>t>=events.release!.timeSec&&t<=events.glove!.timeSec).length:null;
   const analysisFps=analysisHasSourceFrames?videoFps:0; // 0 means unknown; event slots supply exact seconds.
   const analysisBlockReason=manualAnalysisReason(isVideoLoaded,isAnalyzing,isAutoDetectingFrames,videoTiming,releaseFrame,gloveFrame,sourceTimesValid,events)||(eventView?null:'請在影片下方設定出手與進手套時間。');
   useEffect(()=>{analysisInputGeneration.current++;setHasAnalyzed(false);},[selectedPitchType,cameraViewMode,biometrics,strictPitchTypeMode,allowCrossTypeFallback,events,videoTiming,userVideoUrl]);
@@ -405,7 +408,7 @@ export default function App() {
     videoElementRef.current?.pause();
     try {
     setAnalysisProgress(10);
-    setAnalysisStepText(`【步驟 1/6】鎖定出手影格 (F${releaseFrame}) 與進手套影格 (F${gloveFrame})...`);
+    setAnalysisStepText(`【步驟 1/6】鎖定出手 ${events.release!.timeSec.toFixed(6)}s 與進手套 ${events.glove!.timeSec.toFixed(6)}s...`);
 
     // 步驟 2: 運動差分候選、時間走廊追蹤與稀疏觀測點擷取
     let sparseResult = null;
@@ -418,12 +421,13 @@ export default function App() {
         // Yield before bounded candidate integration; the UI can paint progress first.
         await new Promise<void>(resolve=>setTimeout(resolve,0));
         const searchPrior=createDatabaseSearchPrior(PITCH_DATABASE,velocityKmh,selectedPitchType,cameraViewMode,{releaseTimeSec:events.release!.timeSec,flightTimeSec:flightSeconds,distanceM:analysisDistance,geometry});
+        const sourceRelease=sourceIndexAt(videoTiming.timestamps,events.release!.timeSec),sourceCatch=sourceIndexAt(videoTiming.timestamps,events.glove!.timeSec);
         sparseResult = await trackBaseballSparse(videoElementRef.current, {
-          releaseFrame,
-          visibleEndFrame: gloveFrame,
+          releaseFrame:sourceRelease,
+          visibleEndFrame:sourceCatch,
           releaseTimeSec:events.release!.timeSec,catchTimeSec:events.glove!.timeSec,searchPrior,
           isCancelled:()=>inputGeneration!==analysisInputGeneration.current,
-          catchFrame: gloveFrame,
+          catchFrame:sourceCatch,
           fps: videoFps,
           cameraView: cameraViewMode,
           manualAnchor: manualAnchor || undefined,
@@ -528,6 +532,8 @@ export default function App() {
       if(computed.observed_metrics)computed.observed_metrics.details=computed.observed_metrics.details.map(note=>note.startsWith('實測飛行時間：')?`手動媒體事件時差：${flightSeconds.toFixed(6)}s；不依賴來源 FPS。`:note);
       computed.confidence_scores.quality_notes.push(`${sourceTimesValid?'事件未對應來源影格':'來源 FPS／PTS 未確認'}：以播放器事件秒數執行模型估算；時間槽不是原始影格，無新增實測追蹤點。`);
     }
+    computed.event_times={releaseTimeSec:events.release!.timeSec,catchTimeSec:events.glove!.timeSec};
+    computed.original_flight_frames=originalFlightFrames;
     computed.tracking_evidence=sparseResult?.evidence??{sourceFrames:0,attemptedFrames:0,verifiedFrames:0,unverifiedFrames:0,observationCount:0,excludedFrames:0,trackFound:false,trackReliable:false,reason:trackingMessage};
     computed.confidence_scores.quality_notes.push(trackingMessage);
     setCompletedResult(computed);setAnalyzedEvents(events);
@@ -603,7 +609,7 @@ export default function App() {
             <div className="flex items-center gap-2">
               <h1 className="text-base sm:text-lg font-black text-white tracking-tight flex items-center gap-2">
                 <span className="text-transparent bg-clip-text bg-gradient-to-r from-orange-400 via-amber-300 to-cyan-400">
-                  PitchVision V4.6
+                  PitchVision V4.6.1
                 </span>
                 <span className="text-xs sm:text-sm font-semibold text-slate-300 hidden md:inline">
                   投球物理量測與位移反查系統
@@ -848,7 +854,7 @@ export default function App() {
                   </span>
                   {gloveFrame > releaseFrame ? (
                     <span className="text-[11px] font-mono text-cyan-400">
-                      飛行間隔: {flightFrames} 幀 ({flightSeconds}s)
+                      飛行時間：{flightSeconds.toFixed(4)} 秒；{originalFlightFrames===null?'原始影格數未確認':`區間內原始影格 ${originalFlightFrames} 張`}
                     </span>
                   ) : (
                     <span className="text-[11px] font-mono text-amber-400">
@@ -1109,7 +1115,7 @@ export default function App() {
                       距離／時間平均球速推算：依有效飛行距離 ({analysisDistance}m / 實測飛行秒數) 計算 [VIDEO DERIVED]
                     </span>
                     <span className="text-slate-500 font-mono">
-                      影格間隔: {flightFrames > 0 && !eventView?.eventOnly ? `${flightFrames} 幀` : '--'} • 總影格: {totalVideoFrames > 0 ? `${totalVideoFrames} 幀` : '--'}
+                      {originalFlightFrames===null?'原始影格數未確認':`區間內原始影格 ${originalFlightFrames} 張`} • 總原始影格: {sourceTimesValid&&videoTiming?.timeBase==='timestamp'?`${totalVideoFrames} 張`:'未確認'}
                     </span>
                   </>
                 )}

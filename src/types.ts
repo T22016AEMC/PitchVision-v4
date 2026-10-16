@@ -351,6 +351,8 @@ export interface UnifiedConfidenceScores {
 // 綜合匹配輸出結果 (MatchResult)
 export interface MatchResult extends PitchRecord {
   physical_id?:string;
+  event_times?:{releaseTimeSec:number;catchTimeSec:number};
+  original_flight_frames?:number|null;
   projection_match?:{used:boolean;rmse_px?:number;pool_count:number;geometry_method?:string;reason?:string;observation_count?:number;rpm_distinguishable?:boolean;ambiguity_count?:number};
   visual_observations?:BaseballTrackPoint[];
   tracking_evidence?:{sourceFrames:number;attemptedFrames:number;verifiedFrames:number;unverifiedFrames:number;observationCount:number;excludedFrames:number;trackFound:boolean;trackReliable:boolean;reason:string};

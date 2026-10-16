@@ -42,4 +42,10 @@ check(!e.assessTrackEvidence(observations.map(p=>({...p,source:'interpolated'}))
 const at=e.sampleModelAtTime(manual.model_track,manual.model_track[10].timestamp_sec);
 check(at.x_norm===manual.model_track[10].x_norm&&at.y_norm===manual.model_track[10].y_norm,'animation samples actual projected candidate without decorative curve');
 check(e.sampleModelAtTime(manual.model_track,manual.model_track.at(-1).timestamp_sec+.01)===null,'animation cannot extrapolate missing candidate time');
+// V4.6.1: animation samples world coordinates at event media time without warping.
+await build({stdin:{contents:"export {sampleWorldAtTime,PITCH_FIELD} from './src/components/PitchVisualizer';",resolveDir:process.cwd(),loader:'ts'},outfile:'test-results/v45/world.mjs',bundle:true,platform:'node',format:'esm',logLevel:'silent'});
+const scene=await import(pathToFileURL(resolve('test-results/v45/world.mjs')).href),p=manual.model_track[10],world=scene.sampleWorldAtTime(manual.model_track,p.timestamp_sec);
+check(Math.abs(world.x-p.world_x_cm/100)<1e-12&&Math.abs(world.y-p.world_y_cm/100)<1e-12&&world.z===p.depth_z,'scene uses selected physical world trajectory');
+check(scene.sampleWorldAtTime(manual.model_track,manual.model_track.at(-1).timestamp_sec+.01)===null,'world animation cannot stretch candidate past its flight');
+check(scene.PITCH_FIELD.rubber.z===-.94&&scene.PITCH_FIELD.plate.z===17.5,'field landmarks remain independent of candidate pixels');
 console.log(JSON.stringify({checks,passed:true,method:'lightweight developer checks; no tracking or scientific accuracy acceptance'}));
