@@ -1,4 +1,4 @@
-import { assessTrackEvidence } from './trackEvidence';
+import { assessTrackEvidence, EvidenceWindow } from './trackEvidence';
 import { BallObservation, BaseballTrackPoint, VideoTrackMetrics } from '../types';
 
 /**
@@ -14,7 +14,7 @@ import { BallObservation, BaseballTrackPoint, VideoTrackMetrics } from '../types
  * 6. 若證據不足，必須明確回傳 status: 'insufficient_evidence'，不可強造結果。
  */
 
-export interface ValidationInput {
+export interface ValidationInput extends EvidenceWindow {
   observations: BallObservation[];
   releaseFrame: number;
   lastReliableBallFrame?: number;
@@ -53,22 +53,22 @@ export function validateAndReconstructVideoTrack(
   } = input;
 
   // 1. 篩選純視覺實測觀察點 (source === 'observation')
-  const visionObs = observations
-    .filter((o) => o.source === 'observation' && o.confidence >= 0.45)
-    .sort((a, b) => a.frame - b.frame);
+  const evidence=assessTrackEvidence(observations,actualFps,input);
+  const visionObs=evidence.observations;
+  const observedTrack=visionObs.map(p=>({...p,source:'vision' as const}));
 
   const realObservationCount = visionObs.length;
 
   // 門檻：至少需要 >= 3 個獨立 vision observations
-  if (realObservationCount < 3) {
+  if (realObservationCount < 4) {
     const reason = realObservationCount === 0
       ? 'Insufficient visual evidence：影片中未偵測到足夠連續的真實棒球視覺特徵'
-      : `Insufficient visual evidence：僅取得 ${realObservationCount} 個視覺觀測點 (系統嚴格要求 >= 3 個獨立實測點，禁止兩點直接連線偽造軌跡)`;
+      : `Insufficient visual evidence：僅取得 ${realObservationCount} 個視覺觀測點 (系統嚴格要求 >= 4 個獨立實測點，禁止兩點直接連線偽造軌跡)`;
 
     return {
       status: 'insufficient_evidence',
       failureReason: reason,
-      videoTrack: [],
+      videoTrack: observedTrack,
       metrics: {
         horizontal_movement_2d_norm: 0,
         vertical_movement_2d_norm: 0,
@@ -111,12 +111,11 @@ export function validateAndReconstructVideoTrack(
   const sumConf = visionObs.reduce((acc, cur) => acc + cur.confidence, 0);
   const meanConfidence = Number((sumConf / realObservationCount).toFixed(3));
 
-  const evidence = assessTrackEvidence(visionObs, actualFps);
-  if (meanConfidence < 0.50 || !evidence.valid) {
+  if (!evidence.matchingEligible) {
     return {
       status: 'insufficient_evidence',
-      failureReason: `軌跡閘門：${evidence.reasons.join("、")}；Insufficient visual evidence：觀測點平均信賴度不足 (${(meanConfidence * 100).toFixed(1)}% < 50.0%)`,
-      videoTrack: [],
+      failureReason: `軌跡閘門：${evidence.matchingReasons.join("、")}；平均觀測信心 ${(meanConfidence*100).toFixed(1)}%`,
+      videoTrack: observedTrack,
       metrics: {
         horizontal_movement_2d_norm: 0,
         vertical_movement_2d_norm: 0,

@@ -66,7 +66,8 @@ export const MetricsPanel: React.FC<MetricsPanelProps> = ({
 
   return (
     <div id={compact?"metrics-panel-root":"science-metrics-root"} className={`space-y-4 ${compact?"metrics-compact":""}`}>
-      {activeResult.observed_metrics&&!activeResult.observed_metrics.movement_valid&&<div className="p-3 rounded border border-amber-600 text-xs text-amber-200">幾何／追蹤未充分約束：下方位移與旋轉為原模型參考，並非精確量測。原始未截限 IVB {activeResult.observed_metrics.raw_ivb_inch?.toFixed(1)} / HB {activeResult.observed_metrics.raw_hb_inch?.toFixed(1)} 吋；顯示值若受限不得視為實測。{activeResult.observed_metrics.movement_limitation}</div>}
+      {activeResult.movement_definition&&<div className="p-3 rounded border border-indigo-600 text-xs text-indigo-200"><p>{activeResult.movement_definition}</p>{activeResult.raw_database_movement&&<p>診斷：原庫 IVB {activeResult.raw_database_movement.ivb_inch} / HB {activeResult.raw_database_movement.hb_inch} 吋；正式顯示使用相同候選的RK4結果，非影片直接量測。</p>}</div>}
+      {!activeResult.movement_definition&&activeResult.observed_metrics&&!activeResult.observed_metrics.movement_valid&&<div className="p-3 rounded border border-amber-600 text-xs text-amber-200">幾何／追蹤未充分約束：下方位移與旋轉為原模型參考，並非精確量測。原始未截限 IVB {activeResult.observed_metrics.raw_ivb_inch?.toFixed(1)} / HB {activeResult.observed_metrics.raw_hb_inch?.toFixed(1)} 吋；顯示值若受限不得視為實測。{activeResult.observed_metrics.movement_limitation}</div>}
       <div className="science-detail">
       {/* 核心架構橫幅：嚴格遵循三類資料分流 */}
       <div className="bg-gradient-to-r from-blue-950/80 via-slate-900 to-indigo-950/80 border border-blue-500/30 rounded-xl p-3 text-xs space-y-1.5 shadow-sm">
@@ -176,7 +177,7 @@ export const MetricsPanel: React.FC<MetricsPanelProps> = ({
               • 球速: <span className="text-white font-bold">{estimated_velocity_kmh} km/h</span>
             </div>
             <div className="text-[10px] text-slate-400">
-              • {activeResult.observed_metrics?.movement_valid?'條件重建位移':'先驗位移參考'}: IVB {ivbSign}{ivb_inch}" / HB {hbSign}{hb_inch}"
+              • {activeResult.movement_definition?'候選RK4位移':activeResult.observed_metrics?.movement_valid?'條件重建位移':'先驗位移參考'}: IVB {ivbSign}{ivb_inch}" / HB {hbSign}{hb_inch}"
             </div>
           </div>
 
@@ -372,7 +373,7 @@ export const MetricsPanel: React.FC<MetricsPanelProps> = ({
           <div className="flex items-center justify-between text-xs text-slate-400 font-semibold mb-1">
             <span className="flex items-center gap-1.5">
               <TrendingUp className="w-4 h-4 text-purple-400" />
-              5. 觀測垂直 / 水平位移 (IVB / HB)
+              5. {activeResult.movement_definition?'候選模型':'觀測'}垂直 / 水平位移 (IVB / HB)
             </span>
             <span className="text-[9.5px] font-mono uppercase bg-indigo-950/80 text-indigo-300 border border-indigo-500/40 px-1.5 py-0.5 rounded font-bold">
               {activeResult.source_ivb || 'VIDEO DERIVED / CALIBRATED ESTIMATE'}
@@ -385,7 +386,7 @@ export const MetricsPanel: React.FC<MetricsPanelProps> = ({
                 {ivbSign}{ivb_inch}" <span className="text-xs font-normal text-slate-400">({activeResult.vertical_break_cm} cm)</span>
               </div>
               <div className="text-[10px] text-slate-500">
-                扣除重力下墜偏量 {activeResult.uncertainty ? `(±${activeResult.uncertainty.ivb_plus_minus_inch}")` : ''}
+                相對含重力／阻力的無旋轉軌跡；{activeResult.uncertainty?.ivb_range}
               </div>
             </div>
             <div className="bg-slate-950/70 p-2.5 rounded-lg border border-slate-800/80">
@@ -394,7 +395,7 @@ export const MetricsPanel: React.FC<MetricsPanelProps> = ({
                 {hbSign}{hb_inch}" <span className="text-xs font-normal text-slate-400">({activeResult.horizontal_break_cm} cm)</span>
               </div>
               <div className="text-[10px] text-slate-500">
-                側向尾勁位移量 {activeResult.uncertainty ? `(±${activeResult.uncertainty.hb_plus_minus_inch}")` : ''}
+                相對無旋轉軌跡之水平差；{activeResult.uncertainty?.hb_range}
               </div>
             </div>
           </div>
@@ -615,7 +616,7 @@ export const MetricsPanel: React.FC<MetricsPanelProps> = ({
               同球種位移反查 Top {activeResult.top_candidates.length} 加權候選球路
             </span>
             <span className="text-[10px] text-slate-500 font-mono">
-              依 Velocity + IVB + HB 綜合距離加權內插
+              依時間／球速與可用的獨立影像投影排名；不重複計權逆推
             </span>
           </div>
 
@@ -643,7 +644,7 @@ export const MetricsPanel: React.FC<MetricsPanelProps> = ({
                       </span>
                     </div>
                     <div className="text-[10px] text-slate-400 font-mono mt-0.5">
-                      IVB: <span className="text-slate-200">{cand.ivb_inch}"</span> | HB: <span className="text-slate-200">{cand.hb_inch}"</span>
+                      原庫 IVB: <span className="text-slate-200">{cand.ivb_inch}"</span> | HB: <span className="text-slate-200">{cand.hb_inch}"</span>
                       {cand.total_error !== undefined && (
                         <span> | 總誤差: <span className="text-amber-300">{cand.total_error}</span></span>
                       )}
@@ -692,11 +693,11 @@ export const MetricsPanel: React.FC<MetricsPanelProps> = ({
           <ul className="space-y-1.5 text-slate-400 text-[11.5px] leading-relaxed">
             <li className="flex items-start gap-1.5">
               <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0 mt-0.5" />
-              <span><strong>垂直位移 (IVB)</strong>：{ivbSign}{ivb_inch} 吋 (VIDEO DERIVED / CALIBRATED ESTIMATE)。</span>
+              <span><strong>垂直位移 (IVB)</strong>：{ivbSign}{ivb_inch} 吋（{activeResult.movement_definition?'候選RK4模型':'條件估算'}）。</span>
             </li>
             <li className="flex items-start gap-1.5">
               <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0 mt-0.5" />
-              <span><strong>水平位移 (HB)</strong>：{hbSign}{hb_inch} 吋 (VIDEO DERIVED / CALIBRATED ESTIMATE)。</span>
+              <span><strong>水平位移 (HB)</strong>：{hbSign}{hb_inch} 吋（{activeResult.movement_definition?'候選RK4模型':'條件估算'}）。</span>
             </li>
           </ul>
         )}

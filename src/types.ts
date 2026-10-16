@@ -351,7 +351,11 @@ export interface UnifiedConfidenceScores {
 // 綜合匹配輸出結果 (MatchResult)
 export interface MatchResult extends PitchRecord {
   physical_id?:string;
-  projection_match?:{used:boolean;rmse_px?:number;pool_count:number;geometry_method?:string};
+  projection_match?:{used:boolean;rmse_px?:number;pool_count:number;geometry_method?:string;reason?:string;observation_count?:number;rpm_distinguishable?:boolean;ambiguity_count?:number};
+  visual_observations?:BaseballTrackPoint[];
+  tracking_evidence?:{sourceFrames:number;attemptedFrames:number;verifiedFrames:number;unverifiedFrames:number;observationCount:number;excludedFrames:number;trackFound:boolean;trackReliable:boolean;reason:string};
+  movement_definition?:string;
+  raw_database_movement?:{ivb_inch:number;hb_inch:number};
   matched_pitch_type: string;
   estimated_velocity_kmh: number;
   similarity_score: number; // 特徵相似度 (0 ~ 100)
@@ -396,8 +400,8 @@ export interface MatchResult extends PitchRecord {
   source_rpm?: 'VIDEO MEASURED' | 'DATABASE ESTIMATED' | 'MODEL ESTIMATED' | 'MOVEMENT-INFERRED' | 'DATABASE ESTIMATED / MOVEMENT-INFERRED';
   source_spin_axis?: 'VIDEO MEASURED' | 'DATABASE ESTIMATED' | 'MODEL ESTIMATED' | 'MOVEMENT-INFERRED' | 'DATABASE ESTIMATED / MOVEMENT-INFERRED';
   source_spin_efficiency?: 'VIDEO MEASURED' | 'DATABASE ESTIMATED' | 'MODEL ESTIMATED';
-  source_ivb?: 'VIDEO DERIVED' | 'MODEL ESTIMATED' | 'DATABASE ESTIMATED' | 'VIDEO DERIVED / CALIBRATED ESTIMATE' | 'VIDEO DERIVED / 2D' | 'LEGACY MODEL PRIOR / UNCALIBRATED' | 'CONDITIONED 3D ESTIMATE';
-  source_hb?: 'VIDEO DERIVED' | 'MODEL ESTIMATED' | 'DATABASE ESTIMATED' | 'VIDEO DERIVED / CALIBRATED ESTIMATE' | 'VIDEO DERIVED / 2D' | 'LEGACY MODEL PRIOR / UNCALIBRATED' | 'CONDITIONED 3D ESTIMATE';
+  source_ivb?: 'VIDEO DERIVED' | 'MODEL ESTIMATED' | 'DATABASE ESTIMATED' | 'VIDEO DERIVED / CALIBRATED ESTIMATE' | 'VIDEO DERIVED / 2D' | 'LEGACY MODEL PRIOR / UNCALIBRATED' | 'CONDITIONED 3D ESTIMATE' | 'CANDIDATE RK4 / SPINLESS REFERENCE';
+  source_hb?: 'VIDEO DERIVED' | 'MODEL ESTIMATED' | 'DATABASE ESTIMATED' | 'VIDEO DERIVED / CALIBRATED ESTIMATE' | 'VIDEO DERIVED / 2D' | 'LEGACY MODEL PRIOR / UNCALIBRATED' | 'CONDITIONED 3D ESTIMATE' | 'CANDIDATE RK4 / SPINLESS REFERENCE';
 
   // 影格與時間戳
   first_reliable_ball_frame?: number | null;

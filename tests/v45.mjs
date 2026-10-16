@@ -4,7 +4,7 @@ import {pathToFileURL} from 'node:url';
 import {resolve} from 'node:path';
 import assert from 'node:assert/strict';
 await mkdir('test-results/v45',{recursive:true});
-await build({stdin:{contents:"export * from './src/services/ballCandidateDetector';export * from './src/services/robustTemporalTracker';export * from './src/services/physicalCandidates';export * from './src/services/conditionedPhysics';export * from './src/services/projectedDatabaseMatcher';export * from './src/services/standardCamera';export * as engine from './src/matchingEngine';",resolveDir:process.cwd(),loader:'ts'},outfile:'test-results/v45/check.mjs',bundle:true,platform:'node',format:'esm',logLevel:'silent'});
+await build({stdin:{contents:"export * from './src/services/ballCandidateDetector';export * from './src/services/robustTemporalTracker';export * from './src/services/physicalCandidates';export * from './src/services/conditionedPhysics';export * from './src/services/projectedDatabaseMatcher';export * from './src/services/standardCamera';export * from './src/services/trackEvidence';export {sampleModelAtTime} from './src/components/PitchVisualizer';export * as engine from './src/matchingEngine';",resolveDir:process.cwd(),loader:'ts'},outfile:'test-results/v45/check.mjs',bundle:true,platform:'node',format:'esm',logLevel:'silent'});
 const e=await import(pathToFileURL(resolve('test-results/v45/check.mjs')).href);let checks=0;
 const check=(value,label)=>{assert.ok(value,label);checks++};
 const image=(cx)=>{const width=64,height=48,data=new Uint8ClampedArray(width*height*4);for(let i=0;i<data.length;i+=4)data.set([20,20,20,255],i);for(let y=20;y<=24;y++)for(let x=cx-2;x<=cx+2;x++)if((x-cx)**2+(y-22)**2<=4)data.set([230,230,230,255],(y*width+x)*4);return{width,height,data};};
@@ -21,7 +21,7 @@ const sim=e.integrateCandidateFlight(17.5,.5,1.78,2000,12,90),free=e.integrateCa
 check(Math.abs(sim.world.at(-1).z-17.5)<1e-5&&Math.abs(sim.world.at(-1).y-.65)<1e-5,'integrated initial-condition solve');
 check(Math.abs(sim.world[30].z-8.75)>.01,'depth is integrated, not linear');
 check(free.ivb===0&&free.hb===0,'zero-spin reference shares initial conditions');
-const db=e.engine.PITCH_DATABASE,r=db[20],mode='catcher',g=e.standardCameras(mode,720,1280,17.5)[0],proj=e.projectCandidate(r,g),observations=proj.filter((_,i)=>i%6===0).map((p,i)=>({frame:i*6,timestamp:2+p.timeSec,x:p.x,y:p.y,x_norm:p.x_norm,y_norm:p.y_norm,confidence:.9,source:'vision'}));
+const db=e.engine.PITCH_DATABASE,r=db[20],mode='catcher',g=e.standardCameras(mode,720,1280,17.5)[0],proj=e.projectCandidate(r,g),observations=proj.map((p,i)=>({frame:i,timestamp:2+p.timeSec,x:p.x,y:p.y,x_norm:p.x_norm,y_norm:p.y_norm,confidence:.9,source:'vision'}));
 const ranked=e.matchProjectedDatabase(db,17.5/r.flight_time_sec*3.6,'ALL',mode,{releaseTimeSec:2,flightTimeSec:r.flight_time_sec,observations});
 check(ranked.projectionUsed&&ranked.candidates[0].record_id===r.id,'observations drive candidate selection');
 check(ranked.notes.some(n=>n.includes('條件逆推')),'inverse diagnostics wired without replacing DB');
@@ -32,4 +32,14 @@ const manual=e.engine.matchPitchData(126,.499,'ALL',mode,db,0,1,undefined,[],und
 check(Math.abs(manual.flight_time_sec-.499)<1e-12&&manual.top_candidates.length>0&&manual.video_track.length===0,'manual unknown-PTS result still runs');
 check(manual.spin_rate_rpm===db.find(p=>p.id===manual.id).spin_rate_rpm,'inverse cannot overwrite selected database RPM');
 check(await readFile('src/pitchDatabase.json','utf8')===await readFile('baseline/v3/src/pitchDatabase.json','utf8'),'original 1080-record JSON unchanged');
+// V4.6: official movement/visualization and eligibility share the same data source.
+check(Math.abs(manual.ivb_inch-e.candidateModelMovement(db.find(p=>p.id===manual.id)).ivb)<=.0051,'official IVB uses selected candidate integration');
+check(manual.ivb_inch===manual.reconstructed_ivb_inch&&manual.hb_inch===manual.reconstructed_hb_inch,'model and official movement agree');
+check(manual.raw_database_movement.ivb_inch===db.find(p=>p.id===manual.id).ivb_inch,'original movement remains diagnostic');
+const gate=e.assessTrackEvidence(observations,60/r.flight_time_sec,{releaseTimeSec:2,catchTimeSec:2+r.flight_time_sec});
+check(gate.matchingEligible&&ranked.projectionUsed,'same observation gate used by matcher');
+check(!e.assessTrackEvidence(observations.map(p=>({...p,source:'interpolated'})),60).matchingEligible,'interpolations cannot satisfy shared gate');
+const at=e.sampleModelAtTime(manual.model_track,manual.model_track[10].timestamp_sec);
+check(at.x_norm===manual.model_track[10].x_norm&&at.y_norm===manual.model_track[10].y_norm,'animation samples actual projected candidate without decorative curve');
+check(e.sampleModelAtTime(manual.model_track,manual.model_track.at(-1).timestamp_sec+.01)===null,'animation cannot extrapolate missing candidate time');
 console.log(JSON.stringify({checks,passed:true,method:'lightweight developer checks; no tracking or scientific accuracy acceptance'}));

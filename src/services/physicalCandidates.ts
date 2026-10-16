@@ -1,5 +1,6 @@
 import {PitchRecord} from '../types';
 import {integrateCandidateFlight} from './conditionedPhysics';
+export const MOVEMENT_DEFINITION='勝出候選RK4：同初始位置／速度、相同飛行秒數，相對含重力及阻力的無旋轉軌跡之差；IVB=ΔY，HB=ΔX（捕手看向投手之右方為正），單位吋；不是總下墜。';
 export type WorldSample=Readonly<{t:number;x:number;y:number;z:number}>;
 export function physicalKey(r:PitchRecord):string {
  return JSON.stringify([r.code,r.velocity_kmh,r.spin_rate_rpm,((r.spin_axis_decimal%12)+12)%12,r.spin_efficiency_pct,r.ivb_inch,r.hb_inch,r.flight_time_sec,r.standard_distance_m,r.pitcher_hand??'unspecified',r.trajectory_frames?.[0]?.y_cm??null]);

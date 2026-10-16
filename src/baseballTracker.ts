@@ -1,4 +1,3 @@
-import {VideoTimingService} from './services/videoTimingService';
 import {detectBallCandidatesCooperatively, BallVisualCandidate} from './services/ballCandidateDetector';
 import {RobustTemporalTracker} from './services/robustTemporalTracker';
 import {assessTrackEvidence} from './services/trackEvidence';
@@ -14,13 +13,14 @@ export interface SparseTrackingOptions {
 export interface SparseTrackingResult {
  observations:BallObservation[];visibleEndFrame:number;firstSeenFrame:number;lastSeenFrame:number;
  status:'reliable'|'sparse'|'insufficient_evidence';statusMessage:string;
+ evidence:{sourceFrames:number;attemptedFrames:number;verifiedFrames:number;unverifiedFrames:number;observationCount:number;excludedFrames:number;trackFound:boolean;trackReliable:boolean;reason:string};
 }
 
 /** Stream three decoded originals, retain only small candidate lists. Never decode
  * event-bridge/90Hz slots as source images or emit motion predictions as observations. */
 export async function trackBaseballSparse(source:HTMLVideoElement,o:SparseTrackingOptions):Promise<SparseTrackingResult>{
  const times=o.timestamps??[],start=o.releaseTimeSec??times[o.releaseFrame],end=o.catchTimeSec??times[o.catchFrame??o.visibleEndFrame??o.releaseFrame];
- const empty=(message:string):SparseTrackingResult=>({observations:[],visibleEndFrame:o.catchFrame??o.releaseFrame,firstSeenFrame:o.releaseFrame,lastSeenFrame:o.releaseFrame,status:'insufficient_evidence',statusMessage:message});
+ const empty=(message:string):SparseTrackingResult=>({observations:[],visibleEndFrame:o.catchFrame??o.releaseFrame,firstSeenFrame:o.releaseFrame,lastSeenFrame:o.releaseFrame,status:'insufficient_evidence',statusMessage:message,evidence:{sourceFrames:0,attemptedFrames:0,verifiedFrames:0,unverifiedFrames:0,observationCount:0,excludedFrames:0,trackFound:false,trackReliable:false,reason:message}});
  if(times.length<2||times.some((t,i)=>!Number.isFinite(t)||i>0&&t<=times[i-1])||!Number.isFinite(start)||!Number.isFinite(end)||end<=start)return empty('無可枚舉的原始PTS；保留手動時間／球速分析。');
  const indices=times.map((t,frame)=>({t,frame})).filter(p=>p.t>=start&&p.t<=end);
  if(!indices.length)return empty('選定區間沒有來源影格；保留手動分析。');
@@ -32,24 +32,32 @@ export async function trackBaseballSparse(source:HTMLVideoElement,o:SparseTracki
  canvas.width=Math.max(1,Math.round(source.videoWidth*scale));canvas.height=Math.max(1,Math.round(source.videoHeight*scale));
  const lists:{frame:number;timestamp:number;candidates:BallVisualCandidate[]}[]=[];
  type Image={frame:number;timestamp:number;data:Uint8ClampedArray};
- let lastPresented=-Infinity,unverified=0,failed=0,scanned=0;
+ let lastPresented=-Infinity,unverified=0,failed=0,scanned=0,verified=0;
+ let lastMedia:number|undefined,presentationCallback:number|undefined,onPresentation:(()=>void)|undefined;
+ // One compositor listener throughout the scan; no per-seek 450ms race.
+ const watch=()=>{if('requestVideoFrameCallback' in video)presentationCallback=video.requestVideoFrameCallback((_now,meta)=>{lastMedia=meta.mediaTime;onPresentation?.();watch();});};
+ watch();
  try{
   await new Promise<void>((resolve,reject)=>{const timer=setTimeout(()=>finish(Error('追蹤解碼初始化逾時')),5000);const finish=(e?:Error)=>{clearTimeout(timer);video.onloadeddata=null;video.onerror=null;e?reject(e):resolve();};video.onloadeddata=()=>finish();video.onerror=()=>finish(Error('追蹤解碼不可用'));video.src=source.currentSrc||source.src;video.load();});
   const capture=async(index:number):Promise<Image|null>=>{
    cancel();const {frame,t}=indices[index];scanned++;
    if(!('requestVideoFrameCallback' in video)){unverified++;return null;}
-   let callback:number|undefined,timer:ReturnType<typeof setTimeout>|undefined;
-   let finish!:(value:number|undefined)=>void;
-   const presented=new Promise<number|undefined>(resolve=>{finish=resolve;callback=video.requestVideoFrameCallback((_now,meta)=>resolve(meta.mediaTime));timer=setTimeout(()=>resolve(undefined),450);});
    try{
-    await VideoTimingService.seekAndCaptureFrame(video,frame,o.fps,undefined,t);
-    const media=await presented;cancel();const span=(times[frame+1]??video.duration)-t;
-    if(media===undefined||Math.abs(media-t)>Math.max(.002,span*.2)||media<=lastPresented){unverified++;return null;}
+    const span=(times[frame+1]??video.duration)-t,tolerance=Math.min(.004,Math.max(.0001,span*.2));
+    await new Promise<void>((resolve,reject)=>{
+     const timer=setTimeout(()=>finish(Error('原始PTS呈現確認逾時')),3000);
+     const finish=(error?:Error)=>{clearTimeout(timer);video.removeEventListener('seeked',check);video.removeEventListener('error',fail);onPresentation=undefined;error?reject(error):resolve();};
+     const check=()=>{if(o.isCancelled?.())return finish(new DOMException('分析設定已變更','AbortError'));if(!video.seeking&&video.readyState>=2&&lastMedia!==undefined&&Math.abs(lastMedia-t)<=tolerance&&lastMedia>lastPresented)finish();};
+     const fail=()=>finish(Error('原始影格解碼失敗'));
+     video.addEventListener('seeked',check);video.addEventListener('error',fail);onPresentation=check;
+     if(lastMedia!==undefined&&Math.abs(lastMedia-t)<=tolerance&&video.currentTime>=t&&video.currentTime<t+span&&!video.seeking)check();
+     else video.currentTime=Math.min(video.duration-1e-6,t+Math.min(.0005,span/8));
+    });
+    cancel();
     const ctx=canvas.getContext('2d',{willReadFrequently:true});if(!ctx)throw Error('追蹤Canvas不可用');
     ctx.drawImage(video,0,0,canvas.width,canvas.height);
-    lastPresented=media;failed=0;return{frame,timestamp:t,data:ctx.getImageData(0,0,canvas.width,canvas.height).data};
+    lastPresented=lastMedia!;failed=0;verified++;return{frame,timestamp:t,data:ctx.getImageData(0,0,canvas.width,canvas.height).data};
    }catch(error){if(o.isCancelled?.())throw error;failed++;unverified++;return null;}
-   finally{finish(undefined);clearTimeout(timer);if(callback!==undefined)video.cancelVideoFrameCallback(callback);}
   };
   let prev:Image|null=null,current=await capture(0),next=indices.length>1?await capture(1):null;
   for(let i=0;i<indices.length;i++){
@@ -71,10 +79,10 @@ export async function trackBaseballSparse(source:HTMLVideoElement,o:SparseTracki
   };
   const observations=RobustTemporalTracker.associateCandidates(lists,hint);
   for(const p of observations){p.x=p.x_norm*source.videoWidth;p.y=p.y_norm*source.videoHeight;p.radius/=scale;}
-  const evidence=assessTrackEvidence(observations,o.fps),coverage=observations.length/indices.length;
-  const reliable=evidence.valid&&coverage>=.4&&evidence.duration>=(end-start)*.35;
-  const message=`視覺候選 ${observations.length}/${indices.length}；已嘗試 ${scanned} 張；未確認呈現／解碼 ${unverified} 張。${reliable?'時序閘門通過，球體身份仍待確認':`證據不足或不完整：${evidence.reasons.join('、')||'區間覆蓋不足'}；保留手動匹配`}。非神經網路辨識，不產生假觀測。`;
+  const evidence=assessTrackEvidence(observations,o.fps,{releaseTimeSec:start,catchTimeSec:end,sourceTimestamps:times});
+  const reliable=evidence.matchingEligible;
+  const message=`視覺候選 ${observations.length}/${indices.length}；已嘗試 ${scanned} 張；未確認呈現／解碼 ${unverified} 張。${reliable?'時序閘門通過，球體身份仍待確認':`證據不足或不完整：${evidence.matchingReasons.join('、')||'區間覆蓋不足'}；保留手動匹配`}。非神經網路辨識，不產生假觀測。`;
   o.onProgress?.(100,indices.at(-1)!.frame,message);
-  return{observations,visibleEndFrame:observations.at(-1)?.frame??indices.at(-1)!.frame,firstSeenFrame:observations[0]?.frame??indices[0].frame,lastSeenFrame:observations.at(-1)?.frame??indices[0].frame,status:reliable?'reliable':observations.length?'sparse':'insufficient_evidence',statusMessage:message};
- }finally{video.pause();video.removeAttribute('src');video.load();video.remove();canvas.width=canvas.height=0;}
+  return{observations,visibleEndFrame:observations.at(-1)?.frame??indices.at(-1)!.frame,firstSeenFrame:observations[0]?.frame??indices[0].frame,lastSeenFrame:observations.at(-1)?.frame??indices[0].frame,status:reliable?'reliable':observations.length?'sparse':'insufficient_evidence',statusMessage:message,evidence:{sourceFrames:indices.length,attemptedFrames:scanned,verifiedFrames:verified,unverifiedFrames:unverified,observationCount:evidence.observations.length,excludedFrames:indices.length-evidence.observations.length,trackFound:evidence.trackingSuccess,trackReliable:evidence.valid,reason:reliable?'通過共用觀測閘門；球體身份仍待確認':evidence.matchingReasons.join('、')}};
+ }finally{if(presentationCallback!==undefined)video.cancelVideoFrameCallback?.(presentationCallback);onPresentation=undefined;video.pause();video.removeAttribute('src');video.load();video.remove();canvas.width=canvas.height=0;}
 }

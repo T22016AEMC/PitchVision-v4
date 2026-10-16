@@ -30,7 +30,7 @@ for(const fps of [24,60,120]){
  check(current.confidence_scores.trajectory_fit_confidence===0,'unobserved model has no fit confidence');
  for(const key of ['spin_rate_rpm','spin_axis','spin_efficiency_pct'])check(old[key]===current[key],`legacy manual fastball ${key}`);
 }
-const clean=Array.from({length:10},(_,i)=>({frame:i,timestamp:i/24,x_norm:0.2+i*0.02,y_norm:0.5+i*0.001,source:'observation'}));check(e.assessTrackEvidence(clean,24).valid,'continuous track');
+const clean=Array.from({length:10},(_,i)=>({frame:i,timestamp:i/24,x_norm:0.2+i*0.02,y_norm:0.5+i*0.001,source:'observation',confidence:.85}));check(e.assessTrackEvidence(clean,24).valid,'continuous track');
 check(e.linkBallCandidateChains(clean.map(p=>({...p,confidence:0.85})),24).length>=4,'multi-candidate chain');
 const kc=e.movement.MovementDatabaseMatcher.matchCandidates({observedVelocityKmh:110,observedIvbInch:-7,observedHbInch:3,selectedPitchType:'彈指曲球 (Knuckle Curve)',cameraView:'catcher',db:e.match.PITCH_DATABASE,strictPitchTypeMode:true,allowCrossTypeFallback:false});check(kc.matchedRecordCount===120&&kc.candidates.every(c=>e.pitchTypeIdentity(c.pitch_type)==='KC'),'Knuckle Curve never Cutter');
 const image={width:40,height:40,data:new Uint8ClampedArray(40*40*4)};for(let y=18;y<=22;y++)for(let x=18;x<=22;x++){const i=(y*40+x)*4;image.data.set([220,220,220,255],i);}check(e.isCompactBrightRegion(image,20,20,9),'compact white ball');image.data.fill(230);check(!e.isCompactBrightRegion(image,20,20,9),'large white garment rejected');

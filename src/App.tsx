@@ -142,7 +142,8 @@ export default function App() {
   const [videoMetrics, setVideoMetrics] = useState<VideoTrackMetrics | null>(null);
   const [confidenceScores, setConfidenceScores] = useState<UnifiedConfidenceScores | null>(null);
   const [videoQuality, setVideoQuality] = useState<VideoQualityAssessment | null>(null);
-  const [rightColumnTab, setRightColumnTab] = useState<'metrics' | 'visualizer'>('metrics');
+  const [videoTab,setVideoTab]=useState<'original'|'simulation'>('original');
+  useEffect(()=>setVideoTab('original'),[userVideoUrl]);
 
   // Modals
   const [isDbModalOpen, setIsDbModalOpen] = useState<boolean>(false);
@@ -245,7 +246,7 @@ export default function App() {
 
     setVideoLoadError(null);
     setVideoFps(NaN);setTotalVideoFrames(0);setVideoFileName('');setCurrentVideoFrame(0);setTargetFrameSeek(null);setVisibleEndFrame(0);
-    setEvents({release:null,glove:null});setAnalyzedEvents(null);setCompletedResult(null);setCurrentViewKind('original');setUserVideoUrl(null);setVideoTiming(null);setRightColumnTab('metrics');setCameraGeometry(null);setReferencePoints([null,null,null,null]);setReferenceConfirmed(false);
+    setEvents({release:null,glove:null});setAnalyzedEvents(null);setCompletedResult(null);setCurrentViewKind('original');setUserVideoUrl(null);setVideoTiming(null);setVideoTab('original');setCameraGeometry(null);setReferencePoints([null,null,null,null]);setReferenceConfirmed(false);
     setHasAnalyzed(false);
     setAiDetection(null);
     setAutoDetectResult(null);
@@ -456,7 +457,7 @@ export default function App() {
       releaseFrame:sparseResult?.firstSeenFrame??releaseFrame,
       lastReliableBallFrame: effectiveVisibleEnd,
       catchFrame:sparseResult?.lastSeenFrame??gloveFrame,
-      actualFps:videoFps,
+      actualFps:videoFps,releaseTimeSec:events.release!.timeSec,catchTimeSec:events.glove!.timeSec,sourceTimestamps:sourceTimesValid&&videoTiming?.timeBase==='timestamp'?videoTiming.timestamps:undefined,
       videoWidth: videoElementRef.current?.videoWidth || videoTiming?.width || 720,
       videoHeight: videoElementRef.current?.videoHeight || videoTiming?.height || 1280
     });
@@ -468,10 +469,6 @@ export default function App() {
       const decoded=await VideoTimingService.seekAndCaptureFrame(videoElementRef.current,releaseFrame,analysisFps,canvas,events.release!.timeSec);
       if(decoded.imageData){analysisGeometry=estimateImageLines(decoded.imageData);setCameraGeometry(analysisGeometry);}
       } catch {setAnalysisStepText('幾何影像擷取不可用，沿用既有模型估算，不中斷手動分析');}
-    }
-    if(sparseResult?.status!=='reliable'&&validationResult.status==='valid'){
-      validationResult.status='insufficient_evidence';validationResult.failureReason=trackingMessage;
-      validationResult.videoTrack=[];validationResult.metrics.tracking_quality_status='insufficient';
     }
     setVideoTrack(validationResult.videoTrack);
     setVideoMetrics(validationResult.metrics);
@@ -523,7 +520,7 @@ export default function App() {
     }
 
     if(inputGeneration!==analysisInputGeneration.current){setVideoLoadError('分析期間事件或設定已變更，請重新分析');return;}
-    const computed=matchPitchData(velocityKmh,flightSeconds,selectedPitchType,cameraViewMode,PITCH_DATABASE,releaseFrame,gloveFrame,biometrics,validationResult.videoTrack,validationResult.metrics,conf,analysisFps,eventView!.engineTimingBridge,strictPitchTypeMode,allowCrossTypeFallback,isManualUsed,autoDetectResult?.confidence,analysisGeometry||undefined);
+    const computed=matchPitchData(velocityKmh,flightSeconds,selectedPitchType,cameraViewMode,PITCH_DATABASE,releaseFrame,gloveFrame,biometrics,validationResult.videoTrack,validationResult.metrics,conf,analysisFps,eventView!.engineTimingBridge,strictPitchTypeMode,allowCrossTypeFallback,isManualUsed,autoDetectResult?.confidence,analysisGeometry||undefined,sourceTimesValid&&videoTiming?.timeBase==='timestamp'?videoTiming.timestamps:undefined);
     // Time-source presentation only; confidence formulas and numerical scores stay unchanged.
     computed.confidence_scores.quality_notes=computed.confidence_scores.quality_notes.map(note=>note.startsWith('飛行時間 ')?`事件時差 ${flightSeconds.toFixed(6)}s；品質評分沿用原始影格跨度，不把90Hz位置當觀測` : note);
     if(!analysisHasSourceFrames){
@@ -531,6 +528,7 @@ export default function App() {
       if(computed.observed_metrics)computed.observed_metrics.details=computed.observed_metrics.details.map(note=>note.startsWith('實測飛行時間：')?`手動媒體事件時差：${flightSeconds.toFixed(6)}s；不依賴來源 FPS。`:note);
       computed.confidence_scores.quality_notes.push(`${sourceTimesValid?'事件未對應來源影格':'來源 FPS／PTS 未確認'}：以播放器事件秒數執行模型估算；時間槽不是原始影格，無新增實測追蹤點。`);
     }
+    computed.tracking_evidence=sparseResult?.evidence??{sourceFrames:0,attemptedFrames:0,verifiedFrames:0,unverifiedFrames:0,observationCount:0,excludedFrames:0,trackFound:false,trackReliable:false,reason:trackingMessage};
     computed.confidence_scores.quality_notes.push(trackingMessage);
     setCompletedResult(computed);setAnalyzedEvents(events);
     setAnalysisProgress(100);
@@ -605,7 +603,7 @@ export default function App() {
             <div className="flex items-center gap-2">
               <h1 className="text-base sm:text-lg font-black text-white tracking-tight flex items-center gap-2">
                 <span className="text-transparent bg-clip-text bg-gradient-to-r from-orange-400 via-amber-300 to-cyan-400">
-                  PitchVision V4.5
+                  PitchVision V4.6
                 </span>
                 <span className="text-xs sm:text-sm font-semibold text-slate-300 hidden md:inline">
                   投球物理量測與位移反查系統
@@ -859,6 +857,11 @@ export default function App() {
                   )}
                 </div>
 
+                <div role="tablist" aria-label="影片與投球模擬" className="flex gap-2 mt-2 mb-2">
+                  <button id="tab-original-video" role="tab" aria-selected={videoTab==='original'} aria-controls="original-video-panel" onClick={()=>setVideoTab('original')} className={`min-h-11 px-3 rounded-lg text-sm font-bold ${videoTab==='original'?'bg-blue-600 text-white':'bg-slate-800 text-slate-300'}`}>原始影片</button>
+                  <button id="tab-ai-simulation" role="tab" aria-selected={videoTab==='simulation'} aria-controls="simulation-panel" onClick={()=>{videoElementRef.current?.pause();setVideoTab('simulation');}} className={`min-h-11 px-3 rounded-lg text-sm font-bold ${videoTab==='simulation'?'bg-cyan-700 text-white':'bg-slate-800 text-slate-300'}`}>AI 投球軌跡模擬</button>
+                </div>
+                <div id="original-video-panel" role="tabpanel" aria-labelledby="tab-original-video" hidden={videoTab!=='original'}>
                 <PitchVideoPlayer
                   videoUrl={userVideoUrl}
                   releaseFrame={releaseFrame}
@@ -895,6 +898,10 @@ export default function App() {
                   manualPoint1={manualAnchor?.point1 || null}
                   manualPoint2={manualAnchor?.point2 || null}
                 />
+                </div>
+                <div id="simulation-panel" role="tabpanel" aria-labelledby="tab-ai-simulation" hidden={videoTab!=='simulation'}>
+                  <PitchVisualizer result={matchedResult} active={videoTab==='simulation'}/>
+                </div>
 
               </div>
 
@@ -1116,34 +1123,7 @@ export default function App() {
           <section id="right-column" className="space-y-4">
             <div className="bg-slate-900/70 border border-slate-800/90 rounded-2xl p-5 shadow-sm">
               <div className="flex flex-wrap items-center justify-between pb-3 border-b border-slate-800 mb-4 gap-2">
-                <div className="flex items-center gap-1.5 p-1 bg-slate-950/80 rounded-xl border border-slate-800">
-                  <button
-                    type="button"
-                    id="tab-metrics-analysis"
-                    onClick={() => setRightColumnTab('metrics')}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all ${
-                      rightColumnTab === 'metrics'
-                        ? 'bg-blue-600 text-white shadow'
-                        : 'text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
-                    <Activity className="w-3.5 h-3.5" />
-                    <span>5 大核心指標與反查依據</span>
-                  </button>
-                  <button
-                    type="button"
-                    id="tab-dual-track-visualizer"
-                    onClick={() => setRightColumnTab('visualizer')}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all ${
-                      rightColumnTab === 'visualizer'
-                        ? 'bg-cyan-600 text-white shadow'
-                        : 'text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
-                    <Sparkles className="w-3.5 h-3.5" />
-                    <span>3D 軌跡視覺化 (雙軌對比)</span>
-                  </button>
-                </div>
+                <h2 className="text-sm font-bold">核心指標與反查依據</h2>
 
                 <span className="text-[11px] font-mono text-cyan-400">
                   Synthetic Physics Reference (1,080 筆)
@@ -1151,7 +1131,6 @@ export default function App() {
               </div>
 
               {hasAnalyzed&&analyzedEvents&&<p id="event-time-provenance" data-engine-flight-seconds={matchedResult?.flight_time_sec} data-events={JSON.stringify(analyzedEvents)} className="text-xs text-amber-200 mb-3">出手 {analyzedEvents.release?.timeSec.toFixed(6)}s（{analyzedEvents.release?.kind==='interpolated'?'推算':!sourceTimesValid?'媒體時間':analyzedEvents.release?.kind==='cfr_assumed'?'CFR假設':'原始'}）→進手套 {analyzedEvents.glove?.timeSec.toFixed(6)}s（{analyzedEvents.glove?.kind==='interpolated'?'推算':!sourceTimesValid?'媒體時間':analyzedEvents.glove?.kind==='cfr_assumed'?'CFR假設':'原始'}）。事件精度仍受原始間距 {(sourceTimesValid?Math.max(analyzedEvents.release?.sourceSpanSec||0,analyzedEvents.glove?.sourceSpanSec||0).toFixed(4):'未知')}s 與遮蔽限制；補幀不增加真觀測或旋轉量測精度。</p>}
-              {rightColumnTab === 'metrics' ? (
                 <MetricsPanel compact
                   result={matchedResult || undefined}
                   matchedResult={matchedResult || undefined}
@@ -1160,36 +1139,6 @@ export default function App() {
                   flightFrames={flightFrames}
                   standardDistance={STANDARD_DISTANCE_METERS}
                 />
-              ) : (
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between text-xs text-slate-300">
-                    <span className="font-semibold flex items-center gap-1.5">
-                      <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse"></span>
-                      雙軌獨立軌跡展示 (VIDEO TRACK 影片實測點 vs MODEL TRACK 物理重建)
-                    </span>
-                    <span className="text-[10.5px] font-mono text-slate-400">
-                      當前角度：{cameraViewMode === 'catcher' ? '捕手平視視角' : '投手後方平視視角'}
-                    </span>
-                  </div>
-
-                  <PitchVisualizer
-                    viewMode={cameraViewMode}
-                    releaseFrame={releaseFrame}
-                    gloveFrame={gloveFrame}
-                    totalFrames={totalVideoFrames}
-                    flightTimeSec={flightSeconds}
-                    velocityKmh={velocityKmh}
-                    ivbInch={matchedResult?.reconstructed_ivb_inch ?? matchedResult?.ivb_inch ?? 14.5}
-                    hbInch={matchedResult?.reconstructed_hb_inch ?? matchedResult?.hb_inch ?? -6.2}
-                    spinAxis={matchedResult?.spin_axis ?? '1:15'}
-                    pitchName={matchedResult?.matched_pitch_type || selectedPitchType}
-                    videoUrl={userVideoUrl}
-                    spatialCalibration={matchedResult?.spatial_calibration}
-                    videoTrack={videoTrack}
-                    modelTrack={matchedResult?.model_track || matchedResult?.trajectory_points}
-                  />
-                </div>
-              )}
             </div>
           </section>
         </div>

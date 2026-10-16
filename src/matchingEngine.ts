@@ -1,4 +1,4 @@
-import {physicalId,uniquePhysicalCandidates,candidateWorld,candidateModelMovement} from './services/physicalCandidates';
+import {physicalId,uniquePhysicalCandidates,candidateWorld,candidateModelMovement,MOVEMENT_DEFINITION} from './services/physicalCandidates';
 import {projectCandidate,validManualCamera} from './services/standardCamera';
 import {ProjectedMatch,matchProjectedDatabase} from './services/projectedDatabaseMatcher';
 import { CameraGeometry } from './services/cameraGeometry';
@@ -429,7 +429,7 @@ export function calibrateWithAIVisual(
     const record=db.find(r=>physicalId(r)===primaryCandidate.physical_id)!;
     const geometry=databaseRanking.geometry!;
     const projected=projectCandidate(record,geometry),world=candidateWorld(record),releaseTime=timestamps?.[releaseFrame]??0;
-    const simulated=candidateModelMovement(record);reconstructedIvbInch=simulated.ivb;reconstructedHbInch=simulated.hb;
+    const simulated=candidateModelMovement(record);observedIvb=reconstructedIvbInch=Number(simulated.ivb.toFixed(2));observedHb=reconstructedHbInch=Number(simulated.hb.toFixed(2));
     modelTrack=projected.map((p,i)=>({frame:releaseFrame+Math.round(i*(gloveFrame-releaseFrame)/60),timestamp_sec:releaseTime+p.timeSec,x_norm:p.x_norm,y_norm:p.y_norm,radius:4,depth_z:world[i].z,world_x_cm:world[i].x*100,world_y_cm:world[i].y*100,confidence:geometry.quality*100,source:'model'}));
     spinInference.uncertainty.uncertainty_basis='Top 候選離散範圍，非統計信賴區間；缺乏獨立觀測時旋轉解不唯一。';
     spinInference.uncertainty.spin_rate_range=`${Math.min(...candidates.map(c=>c.spin_rate_rpm))}–${Math.max(...candidates.map(c=>c.spin_rate_rpm))} RPM（Top 候選）`;
@@ -440,8 +440,9 @@ export function calibrateWithAIVisual(
       spinInference.uncertainty.spin_axis_range=a.axes.length>12?`${a.axes.length} 種候選轉軸，未唯一識別`:a.axes.join('、')+'（候選歧義）';
       spinInference.uncertainty.uncertainty_basis+=`效率 ${a.efficiency[0]}–${a.efficiency[1]}%；總RPM／有效旋轉／效率不能等同。`;
     }
-    spinInference.uncertainty.ivb_range=`${Math.min(...candidates.map(c=>c.ivb_inch))}–${Math.max(...candidates.map(c=>c.ivb_inch))} 吋（Top 候選）`;
-    spinInference.uncertainty.hb_range=`${Math.min(...candidates.map(c=>c.hb_inch))}–${Math.max(...candidates.map(c=>c.hb_inch))} 吋（Top 候選）`;
+    const simulatedMovement=candidates.map(c=>candidateModelMovement(db.find(r=>physicalId(r)===c.physical_id)!));
+    spinInference.uncertainty.ivb_range=`${Math.min(...simulatedMovement.map(c=>c.ivb)).toFixed(2)}–${Math.max(...simulatedMovement.map(c=>c.ivb)).toFixed(2)} 吋（候選RK4）`;
+    spinInference.uncertainty.hb_range=`${Math.min(...simulatedMovement.map(c=>c.hb)).toFixed(2)}–${Math.max(...simulatedMovement.map(c=>c.hb)).toFixed(2)} 吋（候選RK4）`;
   }
   const trajectoryFit = TrajectoryFitEngine.evaluateTrajectoryFit({
     videoTrack: databaseRanking?[]:activeVideoTrack,
@@ -534,25 +535,28 @@ export function calibrateWithAIVisual(
   };
 
   if(databaseRanking){
-    analysisBasis.movement={source:'DATABASE ESTIMATED',description:'統一物理候選的 IVB/HB；獨立影像投影只用於候選排序，非資料庫自我驗證。'};
+    analysisBasis.movement={source:'CANDIDATE RK4 / SPINLESS REFERENCE',description:MOVEMENT_DEFINITION};
     analysisBasis.spin_rate={source:'DATABASE ESTIMATED',description:databaseRanking.projectionUsed?'以實際視覺候選投影殘差排序，保留首選資料庫RPM；條件逆推不重複計權。':'無足夠軌跡：低辨識度資料庫估計；速度不能唯一確定RPM。'};
     analysisBasis.spin_axis={source:'DATABASE ESTIMATED',description:'保留候選的世界轉軸約定，不隨觀看方向翻轉。'};
-    analysisBasis.forward_validation.description='候選投影重投影已參與排序，不視為獨立驗證；真實準確度未驗證。';
+    analysisBasis.forward_validation.description=databaseRanking.projectionUsed?'投影殘差已參與排序，不能再當獨立驗證；真實準確度未驗證。':'沒有足夠軌跡觀測，僅有候選模型；不能作為實拍驗證。';
     if(!databaseRanking.projectionUsed||databaseRanking.geometry?.method!=='planar_reference')confScores.overall_confidence=Math.min(confScores.overall_confidence,40);
     confScores.quality_notes.push(...databaseRanking.notes);
   }
   const whyExplanation: string[] = [
     `【球速 (Velocity)】: ${effectiveVelocity} km/h (${(effectiveVelocity * 0.621371).toFixed(1)} mph, 飛行 ${effectiveFlightSec.toFixed(3)}s) [VIDEO DERIVED]`,
-    `【觀測位移 (Movement)】: IVB ${observedIvb >= 0 ? '+' : ''}${observedIvb}" / HB ${observedHb >= 0 ? '+' : ''}${observedHb}" [${observedPhysics.movement_source}]`,
+    databaseRanking?`【候選RK4位移】: IVB ${observedIvb} / HB ${observedHb} 吋；${MOVEMENT_DEFINITION}`:`【觀測位移 (Movement)】: IVB ${observedIvb >= 0 ? '+' : ''}${observedIvb}" / HB ${observedHb >= 0 ? '+' : ''}${observedHb}" [${observedPhysics.movement_source}]`,
     databaseRanking?`【資料庫轉速候選】: ${finalSpin} RPM；${spinInference.uncertainty.spin_rate_range}；${databaseRanking.projectionUsed?'影像投影匹配':'無足夠球路觀測，低辨識度估計'}`:`【反推轉速 (Estimated Spin Rate)】: ≈ ${finalSpin} RPM (${spinInference.uncertainty.spin_rate_range})，由同球種速度窗口 (±${matcherResult.effectiveVelocityWindowKmh} km/h) 內 Top ${candidates.length} 筆樣本加權內插並經出手角微調 [MOVEMENT-INFERRED]`,
     databaseRanking?`【資料庫轉軸候選】: ${finalSpinAxis}；${spinInference.uncertainty.spin_axis_range}；不以逆推值覆寫`:`【反推轉軸 (Estimated Spin Axis)】: ≈ ${finalSpinAxis} (${spinInference.uncertainty.spin_axis_range})，經圓周向量平均 (Circular Interpolation) 推得 [MOVEMENT-INFERRED]`,
-    `【物理重建閉環驗證 (Physics Reconstruction)】: 以 RPM ${finalSpin} + Axis ${finalSpinAxis} + Gravity + Drag + Magnus 生成 MODEL TRACK；${trajectoryFit.fit_quality==='NOT_VALIDATED'?'無足夠觀測，RMSE未驗證':`RMSE = ${trajectoryFit.rmse_px}px (${trajectoryFit.fit_quality})`}`,
+    databaseRanking?`【候選RK4投影】: ${databaseRanking.projectionUsed?`匹配殘差 ${databaseRanking.projectionRmsePx?.toFixed(2)}px，非獨立驗證`:`未用軌跡匹配：${databaseRanking.reason}`}；模型IVB/HB與正式結果來源一致。`:`【物理重建閉環驗證 (Physics Reconstruction)】: 以 RPM ${finalSpin} + Axis ${finalSpinAxis} + Gravity + Drag + Magnus 生成 MODEL TRACK；${trajectoryFit.fit_quality==='NOT_VALIDATED'?'無足夠觀測，RMSE未驗證':`RMSE = ${trajectoryFit.rmse_px}px (${trajectoryFit.fit_quality})`}`,
     `【參考資料集 (Database Source)】: PitchVision Synthetic Physics Reference Dataset (Synthetic Physics Prior, 同球種候選 ${matcherResult.matchedRecordCount} 筆)`
   ];
 
   return {
     physical_id: databaseRanking?primaryCandidate.physical_id:undefined,
-    projection_match: databaseRanking?{used:databaseRanking.projectionUsed,rmse_px:databaseRanking.projectionRmsePx,pool_count:databaseRanking.physicalPoolCount,geometry_method:databaseRanking.geometry?.method}:undefined,
+    projection_match: databaseRanking?{used:databaseRanking.projectionUsed,rmse_px:databaseRanking.projectionRmsePx,pool_count:databaseRanking.physicalPoolCount,geometry_method:databaseRanking.geometry?.method,reason:databaseRanking.reason,observation_count:databaseRanking.observationCount,rpm_distinguishable:databaseRanking.rpmDistinguishable,ambiguity_count:databaseRanking.ambiguity?.count}:undefined,
+    visual_observations:(videoTrack??[]).filter(p=>p.source==='vision'),
+    movement_definition:databaseRanking?MOVEMENT_DEFINITION:undefined,
+    raw_database_movement:databaseRanking?{ivb_inch:primaryCandidate.ivb_inch,hb_inch:primaryCandidate.hb_inch}:undefined,
     id: ('record_id' in primaryCandidate ? primaryCandidate.record_id : primaryCandidate.id) || 1,
     pitch_type: databaseRanking?primaryCandidate.pitch_type:selectedPitchType !== "🤖 AI 全數據庫自動辨識" ? selectedPitchType : primaryCandidate.pitch_type,
     code: primaryCandidate.code || 'FF',
@@ -593,7 +597,7 @@ export function calibrateWithAIVisual(
     ai_correction_ivb: Number((observedIvb - primaryCandidate.ivb_inch).toFixed(1)),
     db_baseline_hb: primaryCandidate.hb_inch,
     ai_correction_hb: Number((observedHb - primaryCandidate.hb_inch).toFixed(1)),
-    calibration_notes: observedPhysics.movement_valid ? "已知平面+時間/深度條件估計；非唯一真實3D" : "未完成度量標定：保留原手動模型參考，IVB/HB與RPM/Axis不可視為實測。",
+    calibration_notes: databaseRanking?'正式IVB/HB來自勝出候選RK4與同初值無旋轉基準之差；原庫值另列診斷，非AI修正或影像直接量測。':observedPhysics.movement_valid ? "已知平面+時間/深度條件估計；非唯一真實3D" : "未完成度量標定：保留原手動模型參考，IVB/HB與RPM/Axis不可視為實測。",
     spatial_calibration: spatialCalib,
     trajectory_points: modelTrack,
     top_candidates: candidates,
@@ -609,8 +613,8 @@ export function calibrateWithAIVisual(
     source_rpm: conditioned?'MODEL ESTIMATED':'DATABASE ESTIMATED',
     source_spin_axis: conditioned?'MODEL ESTIMATED':'DATABASE ESTIMATED',
     source_spin_efficiency: 'DATABASE ESTIMATED',
-    source_ivb: databaseRanking?'DATABASE ESTIMATED':observedPhysics.movement_source,
-    source_hb: databaseRanking?'DATABASE ESTIMATED':observedPhysics.movement_source,
+    source_ivb: databaseRanking?'CANDIDATE RK4 / SPINLESS REFERENCE':observedPhysics.movement_source,
+    source_hb: databaseRanking?'CANDIDATE RK4 / SPINLESS REFERENCE':observedPhysics.movement_source,
 
     first_reliable_ball_frame: videoMetrics?.first_seen_frame ?? releaseFrame,
     last_reliable_ball_frame: videoMetrics?.last_seen_frame ?? gloveFrame,
@@ -741,7 +745,8 @@ export function matchPitchData(
   allowCrossTypeFallback: boolean = false,
   isManualAnchorUsed: boolean = false,
   autoDetectionConfidence?: number,
-  cameraGeometry?: CameraGeometry
+  cameraGeometry?: CameraGeometry,
+  sourceTimestamps?:readonly number[]
 ): MatchResult {
   if(cameraGeometry?.method==='planar_reference'&&!validManualCamera(cameraGeometry))throw Error('人工相機標定資料無效，請重新確認標定；可清除後採標準位置先驗。');
   const spatialStandardization = alignAndStandardizeVideoSpatialContext(
@@ -764,7 +769,7 @@ export function matchPitchData(
   const effectiveVelocity = spatialStandardization.standardizedVelocityKmh || queryVelocity;
   const effectiveFlightTime = spatialStandardization.standardizedFlightSec || queryFlightTime;
 
-  const ranking=matchProjectedDatabase(db,effectiveVelocity,selectedPitchType,cameraView,{flightTimeSec:effectiveFlightTime,releaseTimeSec:timestamps?.[releaseFrame]??releaseFrame/(fps||30),distanceM:spatialStandardization.spatialCalibration.effective_travel_distance_m,observations:videoTrack,geometry:cameraGeometry},strictPitchTypeMode,allowCrossTypeFallback);
+  const ranking=matchProjectedDatabase(db,effectiveVelocity,selectedPitchType,cameraView,{flightTimeSec:effectiveFlightTime,releaseTimeSec:timestamps?.[releaseFrame]??releaseFrame/(fps||30),distanceM:spatialStandardization.spatialCalibration.effective_travel_distance_m,observations:videoTrack,geometry:cameraGeometry,sourceTimestamps},strictPitchTypeMode,allowCrossTypeFallback);
   if(!ranking.candidates.length)throw Error('指定球種沒有有效物理候選；請確認球種或明確允許跨球種搜尋。');
   const winner=db.find(r=>physicalId(r)===ranking.candidates[0].physical_id)!;
   const velModResult={...matchVelocityModule(effectiveVelocity,effectiveFlightTime,selectedPitchType,cameraView,[winner]),velocity_similarity:ranking.candidates[0].velocity_similarity};
