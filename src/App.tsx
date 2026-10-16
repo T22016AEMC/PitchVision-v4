@@ -585,7 +585,7 @@ export default function App() {
             <div className="flex items-center gap-2">
               <h1 className="text-base sm:text-lg font-black text-white tracking-tight flex items-center gap-2">
                 <span className="text-transparent bg-clip-text bg-gradient-to-r from-orange-400 via-amber-300 to-cyan-400">
-                  PitchVision V4.3
+                  PitchVision V4.4
                 </span>
                 <span className="text-xs sm:text-sm font-semibold text-slate-300 hidden md:inline">
                   投球物理量測與位移反查系統
@@ -738,7 +738,7 @@ export default function App() {
                     2. 攝影機視角切換 (低角度平視)
                   </label>
                   <span className="text-[11px] text-slate-500">
-                    對應 Synthetic Physics Reference 各 540 筆樣本
+                    共用 1,080 筆物理候選；攝影位置為工程先驗
                   </span>
                 </div>
                 <div className="grid grid-cols-2 gap-2">
@@ -751,7 +751,7 @@ export default function App() {
                         : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
                     }`}
                   >
-                    <span>📷 捕手平視視角 (540 筆)</span>
+                    <span>📷 捕手後方近中線 (共用候選)</span>
                   </button>
 
                   <button
@@ -763,7 +763,7 @@ export default function App() {
                         : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
                     }`}
                   >
-                    <span>⚾ 投手後方平視視角 (540 筆)</span>
+                    <span>⚾ 投手後方偏側 (共用候選)</span>
                   </button>
                 </div>
               </div>

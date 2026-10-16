@@ -1,5 +1,5 @@
 export type ImagePoint={x:number;y:number};
-export interface CameraGeometry {method:'assumed'|'line_assisted'|'planar_reference';azimuthDeg:number;elevationDeg:number;rollDeg:number;quality:number;limitations:string[];width:number;height:number;focalPx?:number;rotation?:number[][];translation?:number[];homography?:number[][];referenceWidthM?:number;referenceLengthM?:number;reprojectionRmsePx?:number;}
+export interface CameraGeometry {method:'assumed'|'line_assisted'|'planar_reference'|'standard_prior';positionM?:[number,number,number];yawDeg?:number;pitchDeg?:number;azimuthDeg:number;elevationDeg:number;rollDeg:number;quality:number;limitations:string[];width:number;height:number;focalPx?:number;rotation?:number[][];translation?:number[];homography?:number[][];referenceWidthM?:number;referenceLengthM?:number;reprojectionRmsePx?:number;}
 export interface GroundReference {points:ImagePoint[];widthM:number;lengthM:number;focalPx?:number;}
 export function solveLinear(matrix:number[][],rhs:number[]):number[]{const a=matrix.map((r,i)=>[...r,rhs[i]]),n=rhs.length;
   for(let i=0;i<n;i++){let best=i;for(let j=i+1;j<n;j++)if(Math.abs(a[j][i])>Math.abs(a[best][i]))best=j;

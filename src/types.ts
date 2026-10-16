@@ -190,6 +190,7 @@ export interface TrajectoryValidation {
 
 // 數據庫單筆紀錄 (Database Record with Provenance)
 export interface PitchRecord {
+  physical_id?: string;
   id: number;
   pitch_type: string;
   code: string;
@@ -234,6 +235,7 @@ export interface DatabaseFrameTrajectoryPoint {
 
 // 數據庫匹配候選
 export interface DatabaseMatchCandidate {
+  physical_id?: string;
   rank: number;
   pitch_type: string;
   code: string;
@@ -348,6 +350,8 @@ export interface UnifiedConfidenceScores {
 
 // 綜合匹配輸出結果 (MatchResult)
 export interface MatchResult extends PitchRecord {
+  physical_id?:string;
+  projection_match?:{used:boolean;rmse_px?:number;pool_count:number;geometry_method?:string};
   matched_pitch_type: string;
   estimated_velocity_kmh: number;
   similarity_score: number; // 特徵相似度 (0 ~ 100)

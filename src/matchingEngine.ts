@@ -1,3 +1,6 @@
+import {physicalId,uniquePhysicalCandidates,candidateWorld,candidateModelMovement} from './services/physicalCandidates';
+import {projectCandidate,validManualCamera} from './services/standardCamera';
+import {ProjectedMatch,matchProjectedDatabase} from './services/projectedDatabaseMatcher';
 import { CameraGeometry } from './services/cameraGeometry';
 import { inferActiveSpin, measureConditionedMovement, forwardProjectedModel } from './services/conditionedPhysics';
 import {
@@ -37,6 +40,7 @@ import { TrajectoryFitEngine } from './services/trajectoryFitEngine';
 
 export const PITCH_DATABASE: PitchRecord[] = (pitchDatabaseRaw as any[]).map((r) => ({
   ...r,
+  physical_id: physicalId(r as PitchRecord),
   source_type: r.source_type || 'synthetic',
   source_label: r.source_label || 'PitchVision Synthetic Physics Reference Dataset (Synthetic Physics Prior)',
   quality_score: r.quality_score || 80
@@ -82,8 +86,9 @@ export function getTopDatabaseCandidates(
 ): DatabaseMatchCandidate[] {
   const matchResult = MovementDatabaseMatcher.matchCandidates({
     observedVelocityKmh: targetVelocity,
-    observedIvbInch: 15.0,
-    observedHbInch: 0.0,
+    independentEvidence: {},
+    observedIvbInch: NaN, // No movement observation is supplied to this query.
+    observedHbInch: NaN,
     selectedPitchType,
     cameraView,
     db,
@@ -119,8 +124,7 @@ export function analyzePitchFramesFrameByFrame(
   cameraView: CameraViewMode = 'catcher'
 ): FrameDetectionResult {
   const safeFps = fps > 0 ? fps : 30;
-  let targetRecords = PITCH_DATABASE.filter(r => r.camera_view === cameraView);
-  if (targetRecords.length === 0) targetRecords = PITCH_DATABASE;
+  let targetRecords = uniquePhysicalCandidates(PITCH_DATABASE);
 
   if (selectedPitchType && selectedPitchType !== "🤖 AI 全數據庫自動辨識") {
     const matched = targetRecords.filter(r => r.pitch_type.includes(selectedPitchType) || selectedPitchType.includes(r.pitch_type));
@@ -194,8 +198,7 @@ export function matchVelocityModule(
   cameraView: CameraViewMode = 'catcher',
   db: PitchRecord[] = PITCH_DATABASE
 ): VelocityMatchModuleResult {
-  let filteredDb = db.filter(d => !d.camera_view || d.camera_view === cameraView);
-  if (filteredDb.length === 0) filteredDb = db;
+  let filteredDb = uniquePhysicalCandidates(db);
 
   if (selectedPitchType && selectedPitchType !== "🤖 AI 全數據庫自動辨識") {
     const pitchFiltered = filteredDb.filter(
@@ -254,8 +257,7 @@ export function matchSpinMovementModule(
   cameraView: CameraViewMode = 'catcher',
   db: PitchRecord[] = PITCH_DATABASE
 ): SpinMovementMatchModuleResult {
-  let filteredDb = db.filter(d => !d.camera_view || d.camera_view === cameraView);
-  if (filteredDb.length === 0) filteredDb = db;
+  let filteredDb = uniquePhysicalCandidates(db);
 
   if (selectedPitchType && selectedPitchType !== "🤖 AI 全數據庫自動辨識") {
     const pitchFiltered = filteredDb.filter(
@@ -302,7 +304,8 @@ export function calibrateWithAIVisual(
   strictPitchTypeMode: boolean = true,
   allowCrossTypeFallback: boolean = false,
   isManualAnchorUsed: boolean = false,
-  autoDetectionConfidence?: number
+  autoDetectionConfidence?: number,
+  databaseRanking?: ProjectedMatch
 ): MatchResult {
   const { matched_record: velRec, measured_velocity } = velModuleResult;
   const bio = spatialCalibInfo?.biometrics || biometrics || DEFAULT_PITCHER_BIOMETRICS;
@@ -326,13 +329,13 @@ export function calibrateWithAIVisual(
 
   const effectiveVelocity = observedPhysics.measured_velocity_kmh || measured_velocity;
   const effectiveFlightSec = observedPhysics.flight_time_sec;
-  const observedIvb = observedPhysics.observed_ivb_inch;
-  const observedHb = observedPhysics.observed_hb_inch;
+  let observedIvb = observedPhysics.observed_ivb_inch;
+  let observedHb = observedPhysics.observed_hb_inch;
 
   // ===========================================================================
   // STEP 2: 球種第一級過濾 + 速度窗口 + 多維位移比對 (Movement Database Matcher)
   // ===========================================================================
-  const matcherResult = MovementDatabaseMatcher.matchCandidates({
+  const matcherResult = databaseRanking ?? MovementDatabaseMatcher.matchCandidates({
     observedVelocityKmh: effectiveVelocity,
     observedIvbInch: observedIvb,
     observedHbInch: observedHb,
@@ -345,6 +348,7 @@ export function calibrateWithAIVisual(
 
   const candidates = matcherResult.candidates;
   const primaryCandidate = candidates[0] || spinModuleResult.matched_record;
+  if(databaseRanking){observedIvb=primaryCandidate.ivb_inch;observedHb=primaryCandidate.hb_inch;}
 
   // ===========================================================================
   // STEP 3: 循環加權內插與出手角修正 (Spin Inference Engine - 唯一權威來源)
@@ -358,13 +362,13 @@ export function calibrateWithAIVisual(
     velocityUncertaintyKmh: observedPhysics.velocity_uncertainty_kmh
   });
 
-  let finalSpin = spinInference.finalSpinRateRpm;
-  let finalSpinAxis = spinInference.finalSpinAxis;
-  let finalAxisDecimal = spinInference.finalSpinAxisDecimal;
-  const finalEfficiency = spinInference.inferredEfficiencyPct;
+  let finalSpin = databaseRanking?primaryCandidate.spin_rate_rpm:spinInference.finalSpinRateRpm;
+  let finalSpinAxis = databaseRanking?primaryCandidate.spin_axis:spinInference.finalSpinAxis;
+  let finalAxisDecimal = databaseRanking?primaryCandidate.spin_axis_decimal:spinInference.finalSpinAxisDecimal;
+  const finalEfficiency = databaseRanking?primaryCandidate.spin_efficiency_pct:spinInference.inferredEfficiencyPct;
 
   let conditioned: ReturnType<typeof measureConditionedMovement> | null=null;
-  if(observedPhysics.movement_valid && spatialCalib.camera_geometry?.method==='planar_reference') {
+  if(!databaseRanking && observedPhysics.movement_valid && spatialCalib.camera_geometry?.method==='planar_reference') {
     conditioned=measureConditionedMovement(videoTrack||[],spatialCalib.camera_geometry,timestamps?.[releaseFrame]??releaseFrame/fps,effectiveFlightSec,spatialCalib.effective_travel_distance_m);
     const physical=inferActiveSpin(conditioned.ax,conditioned.ay,effectiveVelocity,finalEfficiency);
     const accelerationError=conditioned.uncertainty*0.0254*2/(effectiveFlightSec*effectiveFlightSec);
@@ -421,8 +425,20 @@ export function calibrateWithAIVisual(
   // ===========================================================================
   // STEP 5: 前向閉環驗證 (Forward Validation: VIDEO TRACK vs PHYSICS MODEL TRACK)
   // ===========================================================================
+  if(databaseRanking){
+    const record=db.find(r=>physicalId(r)===primaryCandidate.physical_id)!;
+    const geometry=databaseRanking.geometry!;
+    const projected=projectCandidate(record,geometry),world=candidateWorld(record),releaseTime=timestamps?.[releaseFrame]??0;
+    const simulated=candidateModelMovement(record);reconstructedIvbInch=simulated.ivb;reconstructedHbInch=simulated.hb;
+    modelTrack=projected.map((p,i)=>({frame:releaseFrame+Math.round(i*(gloveFrame-releaseFrame)/60),timestamp_sec:releaseTime+p.timeSec,x_norm:p.x_norm,y_norm:p.y_norm,radius:4,depth_z:world[i].z,world_x_cm:world[i].x*100,world_y_cm:world[i].y*100,confidence:geometry.quality*100,source:'model'}));
+    spinInference.uncertainty.uncertainty_basis='Top 候選離散範圍，非統計信賴區間；缺乏獨立觀測時旋轉解不唯一。';
+    spinInference.uncertainty.spin_rate_range=`${Math.min(...candidates.map(c=>c.spin_rate_rpm))}–${Math.max(...candidates.map(c=>c.spin_rate_rpm))} RPM（Top 候選）`;
+    spinInference.uncertainty.spin_axis_range=candidates.map(c=>c.spin_axis).join('、')+'（Top 候選）';
+    spinInference.uncertainty.ivb_range=`${Math.min(...candidates.map(c=>c.ivb_inch))}–${Math.max(...candidates.map(c=>c.ivb_inch))} 吋（Top 候選）`;
+    spinInference.uncertainty.hb_range=`${Math.min(...candidates.map(c=>c.hb_inch))}–${Math.max(...candidates.map(c=>c.hb_inch))} 吋（Top 候選）`;
+  }
   const trajectoryFit = TrajectoryFitEngine.evaluateTrajectoryFit({
-    videoTrack: activeVideoTrack,
+    videoTrack: databaseRanking?[]:activeVideoTrack,
     modelTrack,
     videoWidth: spatialCalib.camera_geometry?.width || 720,
     videoHeight: spatialCalib.camera_geometry?.height || 1280
@@ -511,6 +527,14 @@ export function calibrateWithAIVisual(
     }
   };
 
+  if(databaseRanking){
+    analysisBasis.movement={source:'DATABASE ESTIMATED',description:'統一物理候選的 IVB/HB；獨立影像投影只用於候選排序，非資料庫自我驗證。'};
+    analysisBasis.spin_rate={source:'DATABASE ESTIMATED',description:'保留排名第一候選的 RPM，無反演或出手角覆寫。'};
+    analysisBasis.spin_axis={source:'DATABASE ESTIMATED',description:'保留候選的世界轉軸約定，不隨觀看方向翻轉。'};
+    analysisBasis.forward_validation.description='候選投影重投影已參與排序，不視為獨立驗證；真實準確度未驗證。';
+    if(!databaseRanking.projectionUsed||databaseRanking.geometry?.method!=='planar_reference')confScores.overall_confidence=Math.min(confScores.overall_confidence,40);
+    confScores.quality_notes.push(...databaseRanking.notes);
+  }
   const whyExplanation: string[] = [
     `【球速 (Velocity)】: ${effectiveVelocity} km/h (${(effectiveVelocity * 0.621371).toFixed(1)} mph, 飛行 ${effectiveFlightSec.toFixed(3)}s) [VIDEO DERIVED]`,
     `【觀測位移 (Movement)】: IVB ${observedIvb >= 0 ? '+' : ''}${observedIvb}" / HB ${observedHb >= 0 ? '+' : ''}${observedHb}" [${observedPhysics.movement_source}]`,
@@ -521,8 +545,10 @@ export function calibrateWithAIVisual(
   ];
 
   return {
+    physical_id: databaseRanking?primaryCandidate.physical_id:undefined,
+    projection_match: databaseRanking?{used:databaseRanking.projectionUsed,rmse_px:databaseRanking.projectionRmsePx,pool_count:databaseRanking.physicalPoolCount,geometry_method:databaseRanking.geometry?.method}:undefined,
     id: ('record_id' in primaryCandidate ? primaryCandidate.record_id : primaryCandidate.id) || 1,
-    pitch_type: selectedPitchType !== "🤖 AI 全數據庫自動辨識" ? selectedPitchType : primaryCandidate.pitch_type,
+    pitch_type: databaseRanking?primaryCandidate.pitch_type:selectedPitchType !== "🤖 AI 全數據庫自動辨識" ? selectedPitchType : primaryCandidate.pitch_type,
     code: primaryCandidate.code || 'FF',
     camera_view: cameraView,
     standard_distance_m: spatialCalib.effective_travel_distance_m || STANDARD_GLOVE_DISTANCE_METERS,
@@ -535,7 +561,7 @@ export function calibrateWithAIVisual(
     hb_inch: observedHb,
     vertical_break_cm: Number((observedIvb * 2.54).toFixed(1)),
     horizontal_break_cm: Number((observedHb * 2.54).toFixed(1)),
-    matched_pitch_type: selectedPitchType !== "🤖 AI 全數據庫自動辨識" ? selectedPitchType : primaryCandidate.pitch_type,
+    matched_pitch_type: databaseRanking?primaryCandidate.pitch_type:selectedPitchType !== "🤖 AI 全數據庫自動辨識" ? selectedPitchType : primaryCandidate.pitch_type,
     estimated_velocity_kmh: effectiveVelocity,
     similarity_score: Math.min(96.0, avgSimilarity),
     flight_time_sec: effectiveFlightSec,
@@ -548,14 +574,14 @@ export function calibrateWithAIVisual(
 
     db_baseline_velocity: primaryCandidate.velocity_kmh,
     ai_correction_velocity: Number((effectiveVelocity - primaryCandidate.velocity_kmh).toFixed(1)),
-    db_baseline_spin: spinInference.baseSpinRateRpm,
-    ai_correction_spin: conditioned?finalSpin-spinInference.baseSpinRateRpm:spinInference.rpmCorrectionApplied,
-    spin_rate_calibration_reason: conditioned?'條件3D的Magnus合力約束有效RPM；總RPM使用Efficiency先驗，非唯一解':`Angle correction applied: 出手角 ${observedPhysics.observed_release_angle_deg.toFixed(1)}° 修正 ${spinInference.rpmCorrectionApplied >= 0 ? '+' : ''}${spinInference.rpmCorrectionApplied} RPM (主體由 Top ${candidates.length} 候選位移反查加權內插)`,
+    db_baseline_spin: databaseRanking?primaryCandidate.spin_rate_rpm:spinInference.baseSpinRateRpm,
+    ai_correction_spin: databaseRanking?0:conditioned?finalSpin-spinInference.baseSpinRateRpm:spinInference.rpmCorrectionApplied,
+    spin_rate_calibration_reason: databaseRanking?'統一物理資料庫主候選 RPM；物理反演與出手角不覆寫':conditioned?'條件3D的Magnus合力約束有效RPM；總RPM使用Efficiency先驗，非唯一解':`Angle correction applied: 出手角 ${observedPhysics.observed_release_angle_deg.toFixed(1)}° 修正 ${spinInference.rpmCorrectionApplied >= 0 ? '+' : ''}${spinInference.rpmCorrectionApplied} RPM (主體由 Top ${candidates.length} 候選位移反查加權內插)`,
 
-    db_baseline_axis: spinInference.baseSpinAxis,
-    db_baseline_axis_decimal: spinInference.baseSpinAxisDecimal,
-    ai_correction_axis_minutes: conditioned?Math.round((((finalAxisDecimal-spinInference.baseSpinAxisDecimal+18)%12)-6)*60):spinInference.axisCorrectionMinutesApplied,
-    spin_axis_calibration_reason: conditioned?'條件重建的側向／垂直Magnus合力方向；深度、尺度與Efficiency假設仍有限制':`Angle correction applied: 出手角修正 ${spinInference.axisCorrectionMinutesApplied >= 0 ? '+' : ''}${spinInference.axisCorrectionMinutesApplied} 分鐘 (主體由圓周幾何平均推算)`,
+    db_baseline_axis: databaseRanking?primaryCandidate.spin_axis:spinInference.baseSpinAxis,
+    db_baseline_axis_decimal: databaseRanking?primaryCandidate.spin_axis_decimal:spinInference.baseSpinAxisDecimal,
+    ai_correction_axis_minutes: databaseRanking?0:conditioned?Math.round((((finalAxisDecimal-spinInference.baseSpinAxisDecimal+18)%12)-6)*60):spinInference.axisCorrectionMinutesApplied,
+    spin_axis_calibration_reason: databaseRanking?'保留資料庫世界轉軸約定，不依攝影模式鏡射':conditioned?'條件重建的側向／垂直Magnus合力方向；深度、尺度與Efficiency假設仍有限制':`Angle correction applied: 出手角修正 ${spinInference.axisCorrectionMinutesApplied >= 0 ? '+' : ''}${spinInference.axisCorrectionMinutesApplied} 分鐘 (主體由圓周幾何平均推算)`,
 
     db_baseline_ivb: primaryCandidate.ivb_inch,
     ai_correction_ivb: Number((observedIvb - primaryCandidate.ivb_inch).toFixed(1)),
@@ -577,8 +603,8 @@ export function calibrateWithAIVisual(
     source_rpm: conditioned?'MODEL ESTIMATED':'DATABASE ESTIMATED',
     source_spin_axis: conditioned?'MODEL ESTIMATED':'DATABASE ESTIMATED',
     source_spin_efficiency: 'DATABASE ESTIMATED',
-    source_ivb: observedPhysics.movement_source,
-    source_hb: observedPhysics.movement_source,
+    source_ivb: databaseRanking?'DATABASE ESTIMATED':observedPhysics.movement_source,
+    source_hb: databaseRanking?'DATABASE ESTIMATED':observedPhysics.movement_source,
 
     first_reliable_ball_frame: videoMetrics?.first_seen_frame ?? releaseFrame,
     last_reliable_ball_frame: videoMetrics?.last_seen_frame ?? gloveFrame,
@@ -603,9 +629,9 @@ export function calibrateWithAIVisual(
         ? `觀測到 ${videoTrack?.length || 0} 個實測影格，覆蓋率 ${videoMetrics?.tracking_ratio_pct || 0}%`
         : '實測視覺觀測點不足 (< 3 個獨立觀測點)，不偽造軌跡',
       databasePriorText: `比對 PitchVision Synthetic Physics Reference Dataset (Synthetic Physics Prior)，特徵相似度 ${avgSimilarity}%`,
-      modelInferenceText: 'RPM、Spin Axis 由位移反查推估；MODEL TRACK 由 Gravity + Drag + Magnus 獨立物理重建並與 VIDEO TRACK 進行閉環驗證',
-      overallEvidenceQuality: hasRealTrack && confScores.overall_confidence >= 70 ? 'High' : (hasRealTrack ? 'Medium' : 'Low'),
-      whyExplanation
+      modelInferenceText: databaseRanking?'統一資料庫候選主導；3D 模型經相機先驗投影，旋轉非直接量測。':'RPM、Spin Axis 由位移反查推估；MODEL TRACK 由 Gravity + Drag + Magnus 獨立物理重建並與 VIDEO TRACK 進行閉環驗證',
+      overallEvidenceQuality: databaseRanking&&databaseRanking.geometry?.method!=='planar_reference'?'Low':hasRealTrack && confScores.overall_confidence >= 70 ? 'High' : (hasRealTrack ? 'Medium' : 'Low'),
+      whyExplanation:databaseRanking?[`球速 ${effectiveVelocity} km/h；事件時差 ${effectiveFlightSec}s；候選 ${primaryCandidate.physical_id}`,...databaseRanking.notes,'RPM/Axis/Efficiency/IVB/HB 保留資料庫主候選；世界軌跡為再生成模型，非真實觀測。']:whyExplanation
     }
   };
 }
@@ -613,7 +639,7 @@ export function calibrateWithAIVisual(
 /**
  * 完整雙模組分開比對總入口函式
  */
-export function matchPitchData(
+export function legacyMatchPitchData(
   queryVelocity: number,
   queryFlightTime: number,
   selectedPitchType: string = "🤖 AI 全數據庫自動辨識",
@@ -687,6 +713,80 @@ export function matchPitchData(
     allowCrossTypeFallback,
     isManualAnchorUsed,
     autoDetectionConfidence
+  );
+}
+
+
+export function matchPitchData(
+  queryVelocity: number,
+  queryFlightTime: number,
+  selectedPitchType: string = "🤖 AI 全數據庫自動辨識",
+  cameraView: CameraViewMode = 'catcher',
+  db: PitchRecord[] = PITCH_DATABASE,
+  releaseFrame: number = 24,
+  gloveFrame: number = 66,
+  biometrics: PitcherBiometrics = DEFAULT_PITCHER_BIOMETRICS,
+  videoTrack?: BaseballTrackPoint[],
+  videoMetrics?: VideoTrackMetrics,
+  confidenceScores?: UnifiedConfidenceScores,
+  fps: number = 30,
+  timestamps?: number[],
+  strictPitchTypeMode: boolean = true,
+  allowCrossTypeFallback: boolean = false,
+  isManualAnchorUsed: boolean = false,
+  autoDetectionConfidence?: number,
+  cameraGeometry?: CameraGeometry
+): MatchResult {
+  if(cameraGeometry?.method==='planar_reference'&&!validManualCamera(cameraGeometry))throw Error('人工相機標定資料無效，請重新確認標定；可清除後採標準位置先驗。');
+  const spatialStandardization = alignAndStandardizeVideoSpatialContext(
+    releaseFrame,
+    gloveFrame,
+    fps,
+    cameraView,
+    selectedPitchType,
+    biometrics,
+    timestamps,
+    cameraGeometry
+  );
+
+  spatialStandardization.spatialCalibration.camera_geometry=cameraGeometry;
+  if(cameraGeometry?.method==='planar_reference'){
+    spatialStandardization.spatialCalibration.view_angle_azimuth_deg=cameraGeometry.azimuthDeg;
+    spatialStandardization.spatialCalibration.view_angle_elevation_deg=cameraGeometry.elevationDeg;
+    spatialStandardization.spatialCalibration.calibration_status='已知平面相機估計；離地球深度仍需假設';
+  }
+  const effectiveVelocity = spatialStandardization.standardizedVelocityKmh || queryVelocity;
+  const effectiveFlightTime = spatialStandardization.standardizedFlightSec || queryFlightTime;
+
+  const ranking=matchProjectedDatabase(db,effectiveVelocity,selectedPitchType,cameraView,{flightTimeSec:effectiveFlightTime,releaseTimeSec:timestamps?.[releaseFrame]??releaseFrame/(fps||30),distanceM:spatialStandardization.spatialCalibration.effective_travel_distance_m,observations:videoTrack,geometry:cameraGeometry},strictPitchTypeMode,allowCrossTypeFallback);
+  if(!ranking.candidates.length)throw Error('指定球種沒有有效物理候選；請確認球種或明確允許跨球種搜尋。');
+  const winner=db.find(r=>physicalId(r)===ranking.candidates[0].physical_id)!;
+  const velModResult={...matchVelocityModule(effectiveVelocity,effectiveFlightTime,selectedPitchType,cameraView,[winner]),velocity_similarity:ranking.candidates[0].velocity_similarity};
+  const spinModResult=matchSpinMovementModule(effectiveVelocity,selectedPitchType,cameraView,[winner]);
+  spatialStandardization.spatialCalibration.camera_geometry=ranking.geometry;
+  spatialStandardization.spatialCalibration.view_angle_azimuth_deg=ranking.geometry!.azimuthDeg;
+  spatialStandardization.spatialCalibration.view_angle_elevation_deg=ranking.geometry!.elevationDeg;
+  if(ranking.geometry?.method==='standard_prior')spatialStandardization.spatialCalibration.calibration_status='標準攝影位置工程先驗，非量測姿態；有限參數範圍。';
+  return calibrateWithAIVisual(
+    velModResult,
+    spinModResult,
+    cameraView,
+    releaseFrame,
+    gloveFrame,
+    spatialStandardization.spatialCalibration,
+    biometrics,
+    videoTrack,
+    videoMetrics,
+    confidenceScores,
+    fps,
+    timestamps,
+    selectedPitchType,
+    db,
+    strictPitchTypeMode,
+    allowCrossTypeFallback,
+    isManualAnchorUsed,
+    autoDetectionConfidence,
+    ranking
   );
 }
 

@@ -1,3 +1,5 @@
+import {uniquePhysicalCandidates} from './physicalCandidates';
+import {IndependentEvidence,matchProjectedDatabase} from './projectedDatabaseMatcher';
 import { pitchTypeIdentity } from './pitchTypeIdentity';
 import {
   PitchRecord,
@@ -16,6 +18,7 @@ export const DEFAULT_MATCHER_CONFIG: MovementMatcherConfig = {
 };
 
 export interface MatcherInput {
+  independentEvidence?: IndependentEvidence;
   observedVelocityKmh: number;
   observedIvbInch: number;
   observedHbInch: number;
@@ -62,6 +65,8 @@ export class MovementDatabaseMatcher {
       config = {}
     } = input;
 
+    if(input.independentEvidence)return matchProjectedDatabase(db,observedVelocityKmh,selectedPitchType,cameraView,input.independentEvidence,strictPitchTypeMode,allowCrossTypeFallback,config.topNCandidates??5);
+
     const fullConfig: MovementMatcherConfig = {
       ...DEFAULT_MATCHER_CONFIG,
       ...config
@@ -71,9 +76,8 @@ export class MovementDatabaseMatcher {
     let isCrossTypeFallback = false;
     let isInsufficientPitchTypeData = false;
 
-    // 視角過濾 (若有視角標註則優先使用，若無則全部適用)
-    let viewPool = db.filter((r) => !r.camera_view || r.camera_view === cameraView);
-    if (viewPool.length === 0) viewPool = db;
+    // Camera metadata never excludes physical candidates; exact duplicates get one vote.
+    const viewPool = uniquePhysicalCandidates(db);
 
     // =========================================================================
     // STEP 1: 使用者指定 Pitch Type 成為第一級 Filter (STRICT MODE 預設開啟)
