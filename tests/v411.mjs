@@ -11,7 +11,10 @@ let assertions=0;const check=(condition,label)=>{assert.ok(condition,label);asse
 // V4.4 intentionally integrates matching and adds standard-camera geometry.
 // Preserve their original hash checks against exact pre-upgrade snapshots.
 const integrated=new Set(['src/matchingEngine.ts','src/services/movementDatabaseMatcher.ts','src/services/cameraGeometry.ts','src/types.ts']);
-for(const [file,hash]of Object.entries(manifest.files)){const target=integrated.has(file)?'baseline/v43/'+file:file;check(createHash('sha256').update(await readFile(target)).digest('hex')===hash,`Original scientific source preserved: ${file}`);}
+// V4.5 intentionally updates visual tracking and appends candidate integration.
+const v45Visual=new Set(['src/services/ballCandidateDetector.ts','src/services/robustTemporalTracker.ts']);
+const v45Physics=new Set(['src/baseballTracker.ts','src/services/conditionedPhysics.ts']);
+for(const [file,hash]of Object.entries(manifest.files)){const target=v45Visual.has(file)?'baseline/v4/'+file:v45Physics.has(file)?'baseline/v44/'+file:integrated.has(file)?'baseline/v43/'+file:file;check(createHash('sha256').update(await readFile(target)).digest('hex')===hash,`Original scientific source preserved: ${file}`);}
 for(const fps of [24000/1001,30000/1001,60000/1001,90,120]){
  const times=Array.from({length:35},(_,i)=>i/fps),copy=[...times],fine=e.buildAnalysisTimeline(times,fps,true),lazy=e.createAnalysisTimeline(times,fps,true);
  check(times.every(t=>fine.some(p=>p.kind==='original'&&p.timeSec===t)),'all original PTS retained');

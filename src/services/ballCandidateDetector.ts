@@ -65,7 +65,7 @@ export function detectBallCandidatesInFrame(
   const candidates: BallVisualCandidate[] = [];
 
   // 步長採樣 (1 ~ 2 px 高精度)
-  const step = 2;
+  const step = 1; // Small balls can occupy only 2–3 source pixels.
 
   for (let y = minY + 4; y < maxY - 4; y += step) {
     for (let x = minX + 4; x < maxX - 4; x += step) {
@@ -122,11 +122,22 @@ export function detectBallCandidatesInFrame(
       let predDistPenalty = 0;
       if (predictedPos) {
         const dist = Math.hypot(xNorm - predictedPos.xNorm, yNorm - predictedPos.yNorm);
-        if (dist > predictedPos.radiusNorm) {
-          continue; // 超出預期物理運動走廊，嚴格排除
-        }
-        predDistPenalty = (dist / predictedPos.radiusNorm) * 0.25;
+        predDistPenalty = Math.min(.08,dist/Math.max(.01,predictedPos.radiusNorm)*.04);
       }
+
+      // Measure local bright support rather than assigning a constant shape score.
+      // Compact ellipses include motion streaks; broad clothing/lines lose support.
+      let mass=0,mx=0,my=0,xx=0,yy=0,xy=0,area=0;
+      for(let dy=-4;dy<=4;dy++)for(let dx=-4;dx<=4;dx++){
+        const j=((y+dy)*width+x+dx)*4,value=(currentImageData[j]+currentImageData[j+1]+currentImageData[j+2])/3;
+        const weight=Math.max(0,value-avgSurround-12);if(!weight)continue;
+        mass+=weight;mx+=dx*weight;my+=dy*weight;xx+=dx*dx*weight;yy+=dy*dy*weight;xy+=dx*dy*weight;area++;
+      }
+      if(!mass||area>65)continue;
+      const cx=mx/mass,cy=my/mass,a=xx/mass-cx*cx,d=yy/mass-cy*cy,bxy=xy/mass-cx*cy;
+      const delta=Math.hypot(a-d,2*bxy),minor=Math.max(0,(a+d-delta)/2),major=Math.max(.1,(a+d+delta)/2);
+      const circularity=Math.sqrt((minor+.15)/(major+.15));
+      if(circularity<.12||context.staticBackgroundMask?.[y*width+x])continue;
 
       // 計算特徵得分 (Ball Evidence Score)
       const normContrast = Math.min(1.0, localContrast / 60);
@@ -135,23 +146,23 @@ export function detectBallCandidatesInFrame(
 
       const evidenceScore = Math.max(
         0,
-        Number((normContrast * 0.35 + normBrightness * 0.25 + normMotion * 0.40 - predDistPenalty).toFixed(3))
+          Number((normContrast * 0.30 + normBrightness * 0.15 + normMotion * 0.40 + circularity * .15 - predDistPenalty).toFixed(3))
       );
 
       // 嚴格門檻：只有綜合證據分數 >= 0.45 才能列為候選點
       const isPassedGate = evidenceScore >= 0.45;
 
       candidates.push({
-        x,
-        y,
-        xNorm: Number(xNorm.toFixed(4)),
-        yNorm: Number(yNorm.toFixed(4)),
-        radius: Math.max(2, Math.min(8, Math.round(width * 0.005))),
+        x:x+cx,
+        y:y+cy,
+        xNorm: (x+cx)/width,
+        yNorm: (y+cy)/height,
+        radius: Math.max(1,Math.sqrt(area/Math.PI)),
         evidenceScore,
         localContrast,
         brightness: luma,
         motionResponse: motionResp,
-        blobCircularity: 0.85,
+        blobCircularity: circularity,
         isPassedGate
       });
     }
@@ -160,16 +171,31 @@ export function detectBallCandidatesInFrame(
   // 非極大值抑制 (Non-Maximum Suppression) 避免同一物體重複選取
   candidates.sort((a, b) => b.evidenceScore - a.evidenceScore);
   const filtered: BallVisualCandidate[] = [];
-  const minDistancePx = Math.max(8, width * 0.015);
+  const minDistancePx = Math.max(3, width * 0.004);
 
   for (const c of candidates) {
     if (!c.isPassedGate) continue;
     const isTooClose = filtered.some((f) => Math.hypot(f.x - c.x, f.y - c.y) < minDistancePx);
     if (!isTooClose) {
       filtered.push(c);
-      if (filtered.length >= 8) break; // 最多保留前 8 個最高證據候選
+      if (filtered.length >= 24) break;
     }
   }
 
   return filtered;
+}
+
+/** Reuse the same detector in overlapping strips so mobile input/paint can run. */
+export async function detectBallCandidatesCooperatively(current:Uint8ClampedArray,previous:Uint8ClampedArray|null,next:Uint8ClampedArray|null,context:CandidateSearchContext,isCancelled?:()=>boolean){
+ const candidates:BallVisualCandidate[]=[];
+ for(let top=6;top<context.height-7;top+=80){
+  if(isCancelled?.())throw new DOMException('分析設定已變更','AbortError');
+  const bottom=Math.min(context.height-7,top+80);
+  candidates.push(...detectBallCandidatesInFrame(current,previous,next,{...context,roi:{minXNorm:0,maxXNorm:1,minYNorm:(top-4)/context.height,maxYNorm:(bottom+4)/context.height}}));
+  await new Promise<void>(resolve=>setTimeout(resolve,0));
+ }
+ candidates.sort((a,b)=>b.evidenceScore-a.evidenceScore);
+ const selected:BallVisualCandidate[]=[];
+ for(const c of candidates){if(selected.every(p=>Math.hypot(p.x-c.x,p.y-c.y)>=Math.max(3,context.width*.004)))selected.push(c);if(selected.length===24)break;}
+ return selected;
 }

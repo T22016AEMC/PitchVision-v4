@@ -33,6 +33,8 @@ import { DatabaseModal } from './components/DatabaseModal';
 import { CodeViewerModal } from './components/CodeViewerModal';
 import { APP_PY_CODE } from './appPyCode';
 import { trackBaseballSparse } from './baseballTracker';
+import {createDatabaseSearchPrior} from './services/projectedDatabaseMatcher';
+import {standardCameras} from './services/standardCamera';
 import { validateAndReconstructVideoTrack } from './services/trajectoryValidationService';
 import { calculateUnifiedConfidence } from './confidenceEngine';
 import { VideoQualityAssessment } from './services/videoMetadataService';
@@ -126,7 +128,7 @@ export default function App() {
   // 分析狀態管理
   const analysisInputGeneration=useRef(0);
   const [completedResult,setCompletedResult]=useState<MatchResult|null>(null);
-  const [useExistingTracking,setUseExistingTracking]=useState(false);
+  const [useExistingTracking,setUseExistingTracking]=useState(true);
   const [manualFpsDraft,setManualFpsDraft]=useState('30');
   const [hasAnalyzed, setHasAnalyzed] = useState<boolean>(false);
   const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
@@ -157,6 +159,7 @@ export default function App() {
   // Unmount cleanup for Object URL
   useEffect(() => {
     return () => {
+      analysisInputGeneration.current++;
       if (activeObjectUrlRef.current) {
         VideoLoadService.revokePreviousObjectUrl(activeObjectUrlRef.current);
         activeObjectUrlRef.current = null;
@@ -405,28 +408,40 @@ export default function App() {
 
     // 步驟 2: 運動差分候選、時間走廊追蹤與稀疏觀測點擷取
     let sparseResult = null;
-    if (useExistingTracking && analysisHasSourceFrames && videoElementRef.current) {
+    let trackingFailure:string|null=null;
+    if (useExistingTracking && sourceTimesValid && videoTiming?.timeBase==='timestamp' && videoElementRef.current) {
       setAnalysisProgress(20);
       setAnalysisStepText(`【步驟 2/6】執行 ${formatSourceFps(videoFps)} FPS 差分運動偵測與時間走廊追蹤...`);
       try {
+        const geometry=cameraGeometry??standardCameras(cameraViewMode,videoElementRef.current.videoWidth,videoElementRef.current.videoHeight,analysisDistance)[0];
+        // Yield before bounded candidate integration; the UI can paint progress first.
+        await new Promise<void>(resolve=>setTimeout(resolve,0));
+        const searchPrior=createDatabaseSearchPrior(PITCH_DATABASE,velocityKmh,selectedPitchType,cameraViewMode,{releaseTimeSec:events.release!.timeSec,flightTimeSec:flightSeconds,distanceM:analysisDistance,geometry});
         sparseResult = await trackBaseballSparse(videoElementRef.current, {
           releaseFrame,
-          visibleEndFrame: visibleEndFrame > releaseFrame ? visibleEndFrame : gloveFrame,
+          visibleEndFrame: gloveFrame,
+          releaseTimeSec:events.release!.timeSec,catchTimeSec:events.glove!.timeSec,searchPrior,
+          isCancelled:()=>inputGeneration!==analysisInputGeneration.current,
           catchFrame: gloveFrame,
-          fps: analysisFps,
+          fps: videoFps,
           cameraView: cameraViewMode,
           manualAnchor: manualAnchor || undefined,
           timestamps: videoTiming?.timestamps,
           onProgress: (pct, _curF, stageText) => {
+            if(inputGeneration!==analysisInputGeneration.current)return;
             const scaled = Math.round(20 + pct * 0.3);
             setAnalysisProgress(scaled);
             setAnalysisStepText(`【步驟 2/6】${stageText}`);
           }
         });
       } catch (err) {
+        trackingFailure=`視覺追蹤未完成：${err instanceof Error?err.message:'解碼或搜尋不可用'}；保留手動分析。`;
         console.warn('Sparse baseball tracking fallback:', err);
       }
     }
+
+    if(inputGeneration!==analysisInputGeneration.current)return;
+    const trackingMessage=sparseResult?.statusMessage??trackingFailure??(useExistingTracking?'無已驗證原始PTS，略過視覺追蹤；保留手動媒體時間分析。':'未啟用視覺追蹤；資料庫估計。');
 
     // 步驟 3: 嚴格執行 ACCURACY > COVERAGE 驗證閘門 (絕不用 MODEL TRACK 或兩點直連冒充 VIDEO TRACK)
     setAnalysisProgress(55);
@@ -437,11 +452,11 @@ export default function App() {
     }
 
     const validationResult = validateAndReconstructVideoTrack({
-      observations: (sparseResult?.observations || []).filter(p=>p.timestamp>=events.release!.timeSec&&p.timestamp<=events.glove!.timeSec&&!(events.glove!.kind==='interpolated'&&p.frame===gloveFrame)),
-      releaseFrame,
+      observations: (sparseResult?.observations || []).filter(p=>p.timestamp>=events.release!.timeSec&&p.timestamp<=events.glove!.timeSec),
+      releaseFrame:sparseResult?.firstSeenFrame??releaseFrame,
       lastReliableBallFrame: effectiveVisibleEnd,
-      catchFrame: gloveFrame,
-      actualFps: analysisFps,
+      catchFrame:sparseResult?.lastSeenFrame??gloveFrame,
+      actualFps:videoFps,
       videoWidth: videoElementRef.current?.videoWidth || videoTiming?.width || 720,
       videoHeight: videoElementRef.current?.videoHeight || videoTiming?.height || 1280
     });
@@ -453,6 +468,10 @@ export default function App() {
       const decoded=await VideoTimingService.seekAndCaptureFrame(videoElementRef.current,releaseFrame,analysisFps,canvas,events.release!.timeSec);
       if(decoded.imageData){analysisGeometry=estimateImageLines(decoded.imageData);setCameraGeometry(analysisGeometry);}
       } catch {setAnalysisStepText('幾何影像擷取不可用，沿用既有模型估算，不中斷手動分析');}
+    }
+    if(sparseResult?.status!=='reliable'&&validationResult.status==='valid'){
+      validationResult.status='insufficient_evidence';validationResult.failureReason=trackingMessage;
+      validationResult.videoTrack=[];validationResult.metrics.tracking_quality_status='insufficient';
     }
     setVideoTrack(validationResult.videoTrack);
     setVideoMetrics(validationResult.metrics);
@@ -468,13 +487,13 @@ export default function App() {
     await new Promise((r) => setTimeout(r, 220));
     setAnalysisProgress(88);
     setAnalysisStepText(
-      `【步驟 5/6】鎖定球種【${selectedPitchType}】➔ 實測速度與位移反查 Synthetic Physics Reference Dataset ➔ 加權內插 RPM & 圓周轉軸...`
+      `【步驟 5/6】鎖定球種【${selectedPitchType}】➔ 原始影像觀測與投影候選比較；資料庫提供旋轉參數...`
     );
 
     // 步驟 6: Gravity + Drag + Magnus 物理重建 MODEL TRACK 與閉環驗證
     await new Promise((r) => setTimeout(r, 200));
     setAnalysisProgress(96);
-    setAnalysisStepText('【步驟 6/6】以反推之 RPM + Spin Axis 獨立物理重建 MODEL TRACK，與 VIDEO TRACK 結算 RMSE 閉環誤差與信賴度...');
+    setAnalysisStepText('【步驟 6/6】數值積分資料庫候選並比對影像；匹配殘差不是獨立準確度驗證...');
 
     const isManualUsed = analysisHasSourceFrames && Boolean(manualAnchor?.point1 && manualAnchor?.point2);
     const conf = calculateUnifiedConfidence({
@@ -512,6 +531,7 @@ export default function App() {
       if(computed.observed_metrics)computed.observed_metrics.details=computed.observed_metrics.details.map(note=>note.startsWith('實測飛行時間：')?`手動媒體事件時差：${flightSeconds.toFixed(6)}s；不依賴來源 FPS。`:note);
       computed.confidence_scores.quality_notes.push(`${sourceTimesValid?'事件未對應來源影格':'來源 FPS／PTS 未確認'}：以播放器事件秒數執行模型估算；時間槽不是原始影格，無新增實測追蹤點。`);
     }
+    computed.confidence_scores.quality_notes.push(trackingMessage);
     setCompletedResult(computed);setAnalyzedEvents(events);
     setAnalysisProgress(100);
     setHasAnalyzed(true);
@@ -585,7 +605,7 @@ export default function App() {
             <div className="flex items-center gap-2">
               <h1 className="text-base sm:text-lg font-black text-white tracking-tight flex items-center gap-2">
                 <span className="text-transparent bg-clip-text bg-gradient-to-r from-orange-400 via-amber-300 to-cyan-400">
-                  PitchVision V4.4
+                  PitchVision V4.5
                 </span>
                 <span className="text-xs sm:text-sm font-semibold text-slate-300 hidden md:inline">
                   投球物理量測與位移反查系統
@@ -1013,7 +1033,7 @@ export default function App() {
 
               </div>
 
-              <label className="text-xs flex gap-2"><input id="use-existing-tracking" type="checkbox" checked={useExistingTracking} onChange={e=>setUseExistingTracking(e.target.checked)} disabled={isAnalyzing}/>另執行原有影像追蹤（選填；手動模型分析不需要）</label>
+              <label className="text-xs flex gap-2"><input id="use-existing-tracking" type="checkbox" checked={useExistingTracking} onChange={e=>setUseExistingTracking(e.target.checked)} disabled={isAnalyzing}/>逐格視覺追蹤（預設；證據不足時保留手動分析）</label>
               {/* 6. 啟動位移反查與物理閉環驗證分析按鈕 */}
               <div className="pt-1 space-y-2">
                 <button

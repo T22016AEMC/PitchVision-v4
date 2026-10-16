@@ -1,5 +1,5 @@
 import {PitchRecord} from '../types';
-import {calibrate3DSpatialContext,DEFAULT_PITCHER_BIOMETRICS,reconstructPhysicsModelTrack} from '../spatialCalibration';
+import {integrateCandidateFlight} from './conditionedPhysics';
 export type WorldSample=Readonly<{t:number;x:number;y:number;z:number}>;
 export function physicalKey(r:PitchRecord):string {
  return JSON.stringify([r.code,r.velocity_kmh,r.spin_rate_rpm,((r.spin_axis_decimal%12)+12)%12,r.spin_efficiency_pct,r.ivb_inch,r.hb_inch,r.flight_time_sec,r.standard_distance_m,r.pitcher_hand??'unspecified',r.trajectory_frames?.[0]?.y_cm??null]);
@@ -14,15 +14,11 @@ const cache=new WeakMap<PitchRecord,readonly WorldSample[]>();
 const movementCache=new WeakMap<PitchRecord,{ivb:number;hb:number}>();
 export function candidateWorld(r:PitchRecord):readonly WorldSample[] {
  const saved=cache.get(r);if(saved)return saved;
- // Legacy x_cm is camera-dependent. Regenerate via the existing unchanged
- // reconstructor with ONE physical reference context, discarding its 2D fields.
- const spatial=calibrate3DSpatialContext(0,60,'catcher',r.pitch_type,DEFAULT_PITCHER_BIOMETRICS);
- spatial.effective_travel_distance_m=r.standard_distance_m;
- spatial.release_height_cm=r.trajectory_frames?.[0]?.y_cm??spatial.release_height_cm;
- const times=Array.from({length:61},(_,i)=>r.flight_time_sec*i/60);
- const model=reconstructPhysicsModelTrack({releaseFrame:0,gloveFrame:60,cameraView:'catcher',spatialCalibration:spatial,velocityKmh:r.velocity_kmh,spinRateRpm:r.spin_rate_rpm,spinAxisDecimal:r.spin_axis_decimal,spinEfficiencyPct:r.spin_efficiency_pct,releaseAngleDeg:spatial.arm_slot_angle_deg,fps:60/r.flight_time_sec,timestamps:times});
- const world=Object.freeze(model.modelTrack.map((p,i)=>Object.freeze({t:times[i],x:p.world_x_cm/100,y:p.world_y_cm/100,z:r.standard_distance_m*i/60})));
- cache.set(r,world);movementCache.set(r,{ivb:model.reconstructedIvbInch,hb:model.reconstructedHbInch});return world;
+ // Versioned runtime reconstruction; raw V3 JSON and its camera-specific fields
+ // remain intact. Depth now follows the same integrated state as X/Y.
+ const model=integrateCandidateFlight(r.standard_distance_m,r.flight_time_sec,(r.trajectory_frames?.[0]?.y_cm??178)/100,r.spin_rate_rpm,r.spin_axis_decimal,r.spin_efficiency_pct);
+ const world=Object.freeze(model.world.map(p=>Object.freeze(p)));
+ cache.set(r,world);movementCache.set(r,{ivb:model.ivb,hb:model.hb});return world;
 }
 export function candidateModelMovement(r:PitchRecord){candidateWorld(r);return movementCache.get(r)!;}
 export function worldAt(r:PitchRecord,time:number):WorldSample|null {

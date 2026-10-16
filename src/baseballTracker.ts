@@ -1,311 +1,80 @@
-import { VideoTimingService } from './services/videoTimingService';
-import { isCompactBrightRegion } from './services/compactBallAppearance';
-import { motionForeground } from './services/motionForeground';
-import { assessTrackEvidence } from './services/trackEvidence';
-import { BallObservation, ManualAnchorInput } from './types';
-import { extractMotionCandidates } from './motionDetector';
+import {VideoTimingService} from './services/videoTimingService';
+import {detectBallCandidatesCooperatively, BallVisualCandidate} from './services/ballCandidateDetector';
+import {RobustTemporalTracker} from './services/robustTemporalTracker';
+import {assessTrackEvidence} from './services/trackEvidence';
+import {BallObservation,ManualAnchorInput} from './types';
 
 export interface SparseTrackingOptions {
-  releaseFrame: number;
-  visibleEndFrame?: number;
-  catchFrame?: number | null;
-  fps: number;
-  timestamps?: number[];
-  cameraView: 'catcher' | 'pitcher_rear';
-  manualAnchor?: ManualAnchorInput;
-  onProgress?: (progressPct: number, currentFrame: number, stageText: string) => void;
+ releaseFrame:number;visibleEndFrame?:number;catchFrame?:number|null;fps:number;timestamps?:number[];
+ releaseTimeSec?:number;catchTimeSec?:number;cameraView:'catcher'|'pitcher_rear';manualAnchor?:ManualAnchorInput;
+ searchPrior?:(time:number,x:number,y:number)=>number;
+ isCancelled?:()=>boolean;
+ onProgress?:(pct:number,frame:number,text:string)=>void;
 }
-
 export interface SparseTrackingResult {
-  observations: BallObservation[];
-  visibleEndFrame: number;
-  firstSeenFrame: number;
-  lastSeenFrame: number;
-  status: 'reliable' | 'sparse' | 'insufficient_evidence';
-  statusMessage: string;
+ observations:BallObservation[];visibleEndFrame:number;firstSeenFrame:number;lastSeenFrame:number;
+ status:'reliable'|'sparse'|'insufficient_evidence';statusMessage:string;
 }
 
-async function captureFrameCanvas(video:HTMLVideoElement,canvas:HTMLCanvasElement,_ctx:CanvasRenderingContext2D,frame:number,timeSec:number) {
- const decoded=await VideoTimingService.seekAndCaptureFrame(video,frame,1,canvas,timeSec);
- if(!decoded.imageData)return null;
- return {frame,width:canvas.width,height:canvas.height,data:decoded.imageData.data};
-}
-
-/**
- * 核心稀疏追蹤引擎 (FPS-Aware Temporal Ball Tracking)
- * 1. 嚴格遵守 ACCURACY > COVERAGE。
- * 2. 嚴禁手動兩點直接連線當成球路（手動錨點作為空間提示搜尋真實球影像證據）。
- * 3. 搜尋半徑、位移依 actualFps 動態調整（24, 30, 60, 120, 240 FPS）。
- * 4. 至少需要 >= 3 個具有真實視覺證據之觀測點。
- */
-export async function trackBaseballSparse(
-  videoElement: HTMLVideoElement,
-  options: SparseTrackingOptions
-): Promise<SparseTrackingResult> {
-  const {
-    releaseFrame,
-    visibleEndFrame: inputEndFrame,
-    catchFrame,
-    fps,
-    cameraView,
-    manualAnchor,
-    timestamps,
-    onProgress
-  } = options;
-
-  const nativeW = videoElement.videoWidth || 720;
-  const nativeH = videoElement.videoHeight || 1280;
-
-  // 掃描終點影格（不猜測，最高約 0.8 秒飛行上限）
-  const maxScanSec = 0.8;
-  const maxScanFrames = Math.round(fps * maxScanSec);
-  const searchEndFrame = inputEndFrame || (catchFrame ? catchFrame : Math.min(Math.round((videoElement.duration || 6) * fps), releaseFrame + maxScanFrames));
-  const totalScanFrames = Math.max(1, searchEndFrame - releaseFrame + 1);
-  const scale=Math.min(1,Math.sqrt(96*1024*1024/(totalScanFrames*nativeW*nativeH*4)));
-  const w=Math.max(1,Math.floor(nativeW*scale)),h=Math.max(1,Math.floor(nativeH*scale));
-  if(scale<1)onProgress?.(0,releaseFrame,`影格快取限制96MiB，分析尺寸${w}×${h}；顯示影片尺寸不變`);
-
-  const canvas = document.createElement('canvas');
-  canvas.width = w;
-  canvas.height = h;
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
-
-  if (!ctx) {
-    return {
-      observations: [],
-      visibleEndFrame: searchEndFrame,
-      firstSeenFrame: releaseFrame,
-      lastSeenFrame: releaseFrame,
-      status: 'insufficient_evidence',
-      statusMessage: '無法建立 Canvas 影像讀取環境'
-    };
-  }
-
-  // 逐幀擷取影像 buffer
-  const frameBuffers: Array<{ frame: number; width: number; height: number; data: Uint8ClampedArray } | null> = [];
-
-  for (let f = releaseFrame; f <= searchEndFrame; f++) {
-    const pct = Math.round(((f - releaseFrame) / totalScanFrames) * 35);
-    if (onProgress) onProgress(pct, f, `讀取影格 (F${f} @ ${fps}FPS)...`);
-
-    // 使用 actual timestamp: f / fps
-    const frameData = await captureFrameCanvas(videoElement, canvas, ctx, f, timestamps?.[f] ?? f / fps);
-    frameBuffers.push(frameData);
-  }
-
-  // 差分候選抽取
-  if (onProgress) onProgress(40, releaseFrame, '執行高解析差分運動偵測...');
-  const candidatesPerFrame = new Map<number, Array<{
-    frame: number;
-    x: number;
-    y: number;
-    x_norm: number;
-    y_norm: number;
-    width: number;
-    height: number;
-    score: number;
-    motion_energy: number;
-  }>>();
-
-  // 手動錨點提示走廊（若有使用者設定錨點，用來引導精確 ROI，而非直接連線）
-  let corridorOption: any = undefined;
-  if (manualAnchor?.point1 && manualAnchor?.point2) {
-    corridorOption = {
-      corridor: {
-        x0: manualAnchor.point1.x_norm,
-        y0: manualAnchor.point1.y_norm,
-        x1: manualAnchor.point2.x_norm,
-        y1: manualAnchor.point2.y_norm,
-        widthNorm: 0.12 // 限制在錨點連線周圍 12% 走廊搜尋真實球影像
-      }
-    };
-  }
-
-  for (let i = 0; i < frameBuffers.length; i++) {
-    const curr = frameBuffers[i];
-    if (!curr) continue;
-    const prev = i > 0 ? frameBuffers[i - 1] : null;
-    const next = i < frameBuffers.length - 1 ? frameBuffers[i + 1] : null;
-
-    const movingBody=motionForeground(curr,prev).bounds;
-    const cands = extractMotionCandidates(curr, prev, next, corridorOption).filter(c => {
-      if(movingBody&&c.x_norm>=movingBody.xMin&&c.x_norm<=movingBody.xMax&&c.y_norm>=movingBody.yMin&&c.y_norm<=movingBody.yMax)return false;
-      const x=Math.max(0,Math.min(w-1,c.x)),y=Math.max(0,Math.min(h-1,c.y)),i=(y*w+x)*4;
-      const rgb=[curr.data[i],curr.data[i+1],curr.data[i+2]],brightness=rgb.reduce((a,b)=>a+b,0)/3;
-      if(brightness<120||Math.max(...rgb)-Math.min(...rgb)>55)return false;
-      const radius=Math.max(3,Math.min(12,Math.round(w*0.007)));let surrounding=0;
-      for(const [dx,dy]of [[radius,0],[-radius,0],[0,radius],[0,-radius]]){const j=(Math.max(0,Math.min(h-1,y+dy))*w+Math.max(0,Math.min(w-1,x+dx)))*4;surrounding+=(curr.data[j]+curr.data[j+1]+curr.data[j+2])/3;}
-      return brightness-surrounding/4>12&&isCompactBrightRegion(curr,x,y,radius*2);
-    });
-    if (cands.length > 0) {
-      candidatesPerFrame.set(curr.frame, cands);
-    }
-  }
-
-  // 雙向時間走廊鏈接與真實視覺證據審查
-  if (onProgress) onProgress(65, releaseFrame, '雙向時間走廊連續性檢驗...');
-
-  // 依 actualFps 自適應每幀預期位移
-  // 例如 24 FPS: 棒球飛行 ~14 幀，每幀 y_norm 位移約 0.03 ~ 0.05
-  // 60 FPS: 棒球飛行 ~35 幀，每幀 y_norm 位移約 0.012 ~ 0.02
-  const expectedDisplacementPerFrame = (1.0 / Math.max(12, fps)) * (cameraView === 'catcher' ? 1.0 : 0.85);
-  const searchRadiusNorm = Math.max(0.08, Math.min(0.25, expectedDisplacementPerFrame * 3.5));
-
-  const validObservations: BallObservation[] = [];
-
-  // 尋找高信賴種子 (Highest score evidence)
-  let bestSeed: { frame: number; cand: any } | null = null;
-  candidatesPerFrame.forEach((cands, f) => {
-    for (const c of cands) {
-      if (!bestSeed || c.score > bestSeed.cand.score) {
-        bestSeed = { frame: f, cand: c };
-      }
-    }
-  });
-
-  if (bestSeed && bestSeed.cand.score >= 0.48) {
-    const seed = bestSeed.cand;
-    validObservations.push({
-      frame: bestSeed.frame,
-      timestamp: (timestamps?.[bestSeed.frame] ?? bestSeed.frame / fps),
-      x: seed.x,
-      y: seed.y,
-      x_norm: seed.x_norm,
-      y_norm: seed.y_norm,
-      radius: Math.max(3, Math.min(12, Math.round(seed.width / 2))),
-      confidence: seed.score,
-      source: 'observation',
-      motion_score: seed.motion_energy
-    });
-
-    const seedF = bestSeed.frame;
-
-    // 前向追蹤 (Forward Tracking)
-    let lastPt = seed;
-    let lastF = seedF;
-    let avgVx = 0;
-    let avgVy = cameraView === 'catcher' ? expectedDisplacementPerFrame : -expectedDisplacementPerFrame;
-
-    for (let f = seedF + 1; f <= searchEndFrame; f++) {
-      const cands = candidatesPerFrame.get(f);
-      if (!cands || cands.length === 0) continue;
-
-      const fDelta = f - lastF;
-      const predX = lastPt.x_norm + avgVx * fDelta;
-      const predY = lastPt.y_norm + avgVy * fDelta;
-
-      let bestMatch: any = null;
-      let minDis = searchRadiusNorm * fDelta;
-
-      for (const c of cands) {
-        const d = Math.hypot(c.x_norm - predX, c.y_norm - predY);
-        // 方向性檢查
-        const dirConsistent = cameraView === 'catcher' ? (c.y_norm >= lastPt.y_norm - 0.02) : true;
-        if (d < minDis && dirConsistent) {
-          minDis = d;
-          bestMatch = c;
-        }
-      }
-
-      if (bestMatch && bestMatch.score >= 0.42) {
-        const actualDx = (bestMatch.x_norm - lastPt.x_norm) / fDelta;
-        const actualDy = (bestMatch.y_norm - lastPt.y_norm) / fDelta;
-        avgVx = avgVx * 0.35 + actualDx * 0.65;
-        avgVy = avgVy * 0.35 + actualDy * 0.65;
-
-        lastPt = bestMatch;
-        lastF = f;
-
-        validObservations.push({
-          frame: f,
-          timestamp: (timestamps?.[f] ?? f / fps),
-          x: bestMatch.x,
-          y: bestMatch.y,
-          x_norm: bestMatch.x_norm,
-          y_norm: bestMatch.y_norm,
-          radius: Math.max(3, Math.min(12, Math.round(bestMatch.width / 2))),
-          confidence: Number(bestMatch.score.toFixed(3)),
-          source: 'observation',
-          motion_score: bestMatch.motion_energy
-        });
-      }
-    }
-
-    // 後向驗證 (Backward Tracking toward release)
-    lastPt = seed;
-    lastF = seedF;
-    for (let f = seedF - 1; f >= releaseFrame; f--) {
-      const cands = candidatesPerFrame.get(f);
-      if (!cands || cands.length === 0) continue;
-
-      const fDelta = lastF - f;
-      const predX = lastPt.x_norm - avgVx * fDelta;
-      const predY = lastPt.y_norm - avgVy * fDelta;
-
-      let bestMatch: any = null;
-      let minDis = searchRadiusNorm * fDelta;
-
-      for (const c of cands) {
-        const d = Math.hypot(c.x_norm - predX, c.y_norm - predY);
-        if (d < minDis) {
-          minDis = d;
-          bestMatch = c;
-        }
-      }
-
-      if (bestMatch && bestMatch.score >= 0.42) {
-        lastPt = bestMatch;
-        lastF = f;
-
-        validObservations.unshift({
-          frame: f,
-          timestamp: (timestamps?.[f] ?? f / fps),
-          x: bestMatch.x,
-          y: bestMatch.y,
-          x_norm: bestMatch.x_norm,
-          y_norm: bestMatch.y_norm,
-          radius: Math.max(3, Math.min(12, Math.round(bestMatch.width / 2))),
-          confidence: Number(bestMatch.score.toFixed(3)),
-          source: 'observation',
-          motion_score: bestMatch.motion_energy
-        });
-      }
-    }
-  }
-
-  // 嚴格排序
-  validObservations.sort((a, b) => a.frame - b.frame);
-  for(const point of validObservations){point.x=Math.round(point.x_norm*nativeW);point.y=Math.round(point.y_norm*nativeH);point.radius*=nativeW/w;}
-
-  // 檢驗真實觀測數量 (最高準則：ACCURACY > COVERAGE，少於 3 點視為證據不足)
-  if (validObservations.length < 3) {
-    if (onProgress) onProgress(100, searchEndFrame, '視覺證據不足 (真實觀測點 < 3)');
-    return {
-      observations: validObservations,
-      visibleEndFrame: searchEndFrame,
-      firstSeenFrame: validObservations[0]?.frame || releaseFrame,
-      lastSeenFrame: validObservations[validObservations.length - 1]?.frame || releaseFrame,
-      status: 'insufficient_evidence',
-      statusMessage: validObservations.length === 0
-        ? 'Insufficient visual evidence：在目前設定影格間未找到足夠清晰的棒球動態特徵'
-        : `Insufficient visual evidence：僅檢測到 ${validObservations.length} 個離散點，未達可靠重構門檻 (>=3 點)`
-    };
-  }
-
-  const firstSeen = validObservations[0].frame;
-  const lastSeen = validObservations[validObservations.length - 1].frame;
-  const evidence=assessTrackEvidence(validObservations,fps);
-
-  if (onProgress) {
-    onProgress(100, lastSeen, `追蹤完成：獲取 ${validObservations.length} 個真實視覺觀測點 (F${firstSeen} ~ F${lastSeen})`);
-  }
-
-  return {
-    observations: validObservations,
-    visibleEndFrame: lastSeen,
-    firstSeenFrame: firstSeen,
-    lastSeenFrame: lastSeen,
-    status: evidence.valid?'reliable':'sparse',
-    statusMessage: `取得 ${validObservations.length} 個影像候選觀測 (F${firstSeen} ~ F${lastSeen})，時空閘門${evidence.valid?'通過':'未通過：'+evidence.reasons.join('、')}；仍需確認球體身份。`
+/** Stream three decoded originals, retain only small candidate lists. Never decode
+ * event-bridge/90Hz slots as source images or emit motion predictions as observations. */
+export async function trackBaseballSparse(source:HTMLVideoElement,o:SparseTrackingOptions):Promise<SparseTrackingResult>{
+ const times=o.timestamps??[],start=o.releaseTimeSec??times[o.releaseFrame],end=o.catchTimeSec??times[o.catchFrame??o.visibleEndFrame??o.releaseFrame];
+ const empty=(message:string):SparseTrackingResult=>({observations:[],visibleEndFrame:o.catchFrame??o.releaseFrame,firstSeenFrame:o.releaseFrame,lastSeenFrame:o.releaseFrame,status:'insufficient_evidence',statusMessage:message});
+ if(times.length<2||times.some((t,i)=>!Number.isFinite(t)||i>0&&t<=times[i-1])||!Number.isFinite(start)||!Number.isFinite(end)||end<=start)return empty('無可枚舉的原始PTS；保留手動時間／球速分析。');
+ const indices=times.map((t,frame)=>({t,frame})).filter(p=>p.t>=start&&p.t<=end);
+ if(!indices.length)return empty('選定區間沒有來源影格；保留手動分析。');
+ const video=document.createElement('video');video.muted=true;video.playsInline=true;video.preload='auto';
+ video.style.cssText='position:fixed;width:1px;height:1px;bottom:0;left:0;opacity:.01;pointer-events:none';video.setAttribute('aria-hidden','true');document.body.append(video);
+ const cancel=()=>{if(o.isCancelled?.())throw new DOMException('分析設定已變更','AbortError');};
+ const canvas=document.createElement('canvas');
+ const scale=Math.min(1,1280/Math.max(source.videoWidth,source.videoHeight));
+ canvas.width=Math.max(1,Math.round(source.videoWidth*scale));canvas.height=Math.max(1,Math.round(source.videoHeight*scale));
+ const lists:{frame:number;timestamp:number;candidates:BallVisualCandidate[]}[]=[];
+ type Image={frame:number;timestamp:number;data:Uint8ClampedArray};
+ let lastPresented=-Infinity,unverified=0,failed=0,scanned=0;
+ try{
+  await new Promise<void>((resolve,reject)=>{const timer=setTimeout(()=>finish(Error('追蹤解碼初始化逾時')),5000);const finish=(e?:Error)=>{clearTimeout(timer);video.onloadeddata=null;video.onerror=null;e?reject(e):resolve();};video.onloadeddata=()=>finish();video.onerror=()=>finish(Error('追蹤解碼不可用'));video.src=source.currentSrc||source.src;video.load();});
+  const capture=async(index:number):Promise<Image|null>=>{
+   cancel();const {frame,t}=indices[index];scanned++;
+   if(!('requestVideoFrameCallback' in video)){unverified++;return null;}
+   let callback:number|undefined,timer:ReturnType<typeof setTimeout>|undefined;
+   let finish!:(value:number|undefined)=>void;
+   const presented=new Promise<number|undefined>(resolve=>{finish=resolve;callback=video.requestVideoFrameCallback((_now,meta)=>resolve(meta.mediaTime));timer=setTimeout(()=>resolve(undefined),450);});
+   try{
+    await VideoTimingService.seekAndCaptureFrame(video,frame,o.fps,undefined,t);
+    const media=await presented;cancel();const span=(times[frame+1]??video.duration)-t;
+    if(media===undefined||Math.abs(media-t)>Math.max(.002,span*.2)||media<=lastPresented){unverified++;return null;}
+    const ctx=canvas.getContext('2d',{willReadFrequently:true});if(!ctx)throw Error('追蹤Canvas不可用');
+    ctx.drawImage(video,0,0,canvas.width,canvas.height);
+    lastPresented=media;failed=0;return{frame,timestamp:t,data:ctx.getImageData(0,0,canvas.width,canvas.height).data};
+   }catch(error){if(o.isCancelled?.())throw error;failed++;unverified++;return null;}
+   finally{finish(undefined);clearTimeout(timer);if(callback!==undefined)video.cancelVideoFrameCallback(callback);}
   };
+  let prev:Image|null=null,current=await capture(0),next=indices.length>1?await capture(1):null;
+  for(let i=0;i<indices.length;i++){
+   cancel();if(failed>=3)break;
+   if(current){
+    const candidates=await detectBallCandidatesCooperatively(current.data,prev?.data??null,next?.data??null,{width:canvas.width,height:canvas.height,actualFps:o.fps,currentFrame:current.frame},o.isCancelled);
+    lists.push({frame:current.frame,timestamp:current.timestamp,candidates});
+   }else lists.push({frame:indices[i].frame,timestamp:indices[i].t,candidates:[]});
+   o.onProgress?.(Math.round((i+1)/indices.length*85),indices[i].frame,`逐格視覺搜尋 ${i+1}/${indices.length}（${canvas.width}×${canvas.height}，三張緩衝）`);
+   prev=current;current=next;next=i+2<indices.length?await capture(i+2):null;
+   await new Promise<void>(resolve=>setTimeout(resolve,0));
+  }
+  const hint=(time:number,x:number,y:number)=>{
+   const db=o.searchPrior?.(time,x,y)??0,a=o.manualAnchor?.point1,b=o.manualAnchor?.point2;
+   if(!a||!b||![a.x_norm,a.y_norm,b.x_norm,b.y_norm,times[a.frame],times[b.frame]].every(Number.isFinite)||times[b.frame]<=times[a.frame])return db;
+   const t=Math.max(0,Math.min(1,(time-times[a.frame])/(times[b.frame]-times[a.frame])));
+   // Existing manual coordinates guide image association only, never become points.
+   return .5*db+.5*Math.exp(-Math.hypot(x-a.x_norm-(b.x_norm-a.x_norm)*t,y-a.y_norm-(b.y_norm-a.y_norm)*t)/.12);
+  };
+  const observations=RobustTemporalTracker.associateCandidates(lists,hint);
+  for(const p of observations){p.x=p.x_norm*source.videoWidth;p.y=p.y_norm*source.videoHeight;p.radius/=scale;}
+  const evidence=assessTrackEvidence(observations,o.fps),coverage=observations.length/indices.length;
+  const reliable=evidence.valid&&coverage>=.4&&evidence.duration>=(end-start)*.35;
+  const message=`視覺候選 ${observations.length}/${indices.length}；已嘗試 ${scanned} 張；未確認呈現／解碼 ${unverified} 張。${reliable?'時序閘門通過，球體身份仍待確認':`證據不足或不完整：${evidence.reasons.join('、')||'區間覆蓋不足'}；保留手動匹配`}。非神經網路辨識，不產生假觀測。`;
+  o.onProgress?.(100,indices.at(-1)!.frame,message);
+  return{observations,visibleEndFrame:observations.at(-1)?.frame??indices.at(-1)!.frame,firstSeenFrame:observations[0]?.frame??indices[0].frame,lastSeenFrame:observations.at(-1)?.frame??indices[0].frame,status:reliable?'reliable':observations.length?'sparse':'insufficient_evidence',statusMessage:message};
+ }finally{video.pause();video.removeAttribute('src');video.load();video.remove();canvas.width=canvas.height=0;}
 }

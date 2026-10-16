@@ -434,6 +434,12 @@ export function calibrateWithAIVisual(
     spinInference.uncertainty.uncertainty_basis='Top 候選離散範圍，非統計信賴區間；缺乏獨立觀測時旋轉解不唯一。';
     spinInference.uncertainty.spin_rate_range=`${Math.min(...candidates.map(c=>c.spin_rate_rpm))}–${Math.max(...candidates.map(c=>c.spin_rate_rpm))} RPM（Top 候選）`;
     spinInference.uncertainty.spin_axis_range=candidates.map(c=>c.spin_axis).join('、')+'（Top 候選）';
+    if(databaseRanking.ambiguity){const a=databaseRanking.ambiguity;
+      spinInference.uncertainty.spin_rate_min=a.rpm[0];spinInference.uncertainty.spin_rate_max=a.rpm[1];
+      spinInference.uncertainty.spin_rate_range=`${a.rpm[0]}–${a.rpm[1]} RPM（${a.count} 個容許候選，非信賴區間）`;
+      spinInference.uncertainty.spin_axis_range=a.axes.length>12?`${a.axes.length} 種候選轉軸，未唯一識別`:a.axes.join('、')+'（候選歧義）';
+      spinInference.uncertainty.uncertainty_basis+=`效率 ${a.efficiency[0]}–${a.efficiency[1]}%；總RPM／有效旋轉／效率不能等同。`;
+    }
     spinInference.uncertainty.ivb_range=`${Math.min(...candidates.map(c=>c.ivb_inch))}–${Math.max(...candidates.map(c=>c.ivb_inch))} 吋（Top 候選）`;
     spinInference.uncertainty.hb_range=`${Math.min(...candidates.map(c=>c.hb_inch))}–${Math.max(...candidates.map(c=>c.hb_inch))} 吋（Top 候選）`;
   }
@@ -529,7 +535,7 @@ export function calibrateWithAIVisual(
 
   if(databaseRanking){
     analysisBasis.movement={source:'DATABASE ESTIMATED',description:'統一物理候選的 IVB/HB；獨立影像投影只用於候選排序，非資料庫自我驗證。'};
-    analysisBasis.spin_rate={source:'DATABASE ESTIMATED',description:'保留排名第一候選的 RPM，無反演或出手角覆寫。'};
+    analysisBasis.spin_rate={source:'DATABASE ESTIMATED',description:databaseRanking.projectionUsed?'以實際視覺候選投影殘差排序，保留首選資料庫RPM；條件逆推不重複計權。':'無足夠軌跡：低辨識度資料庫估計；速度不能唯一確定RPM。'};
     analysisBasis.spin_axis={source:'DATABASE ESTIMATED',description:'保留候選的世界轉軸約定，不隨觀看方向翻轉。'};
     analysisBasis.forward_validation.description='候選投影重投影已參與排序，不視為獨立驗證；真實準確度未驗證。';
     if(!databaseRanking.projectionUsed||databaseRanking.geometry?.method!=='planar_reference')confScores.overall_confidence=Math.min(confScores.overall_confidence,40);
@@ -538,8 +544,8 @@ export function calibrateWithAIVisual(
   const whyExplanation: string[] = [
     `【球速 (Velocity)】: ${effectiveVelocity} km/h (${(effectiveVelocity * 0.621371).toFixed(1)} mph, 飛行 ${effectiveFlightSec.toFixed(3)}s) [VIDEO DERIVED]`,
     `【觀測位移 (Movement)】: IVB ${observedIvb >= 0 ? '+' : ''}${observedIvb}" / HB ${observedHb >= 0 ? '+' : ''}${observedHb}" [${observedPhysics.movement_source}]`,
-    `【反推轉速 (Estimated Spin Rate)】: ≈ ${finalSpin} RPM (${spinInference.uncertainty.spin_rate_range})，由同球種速度窗口 (±${matcherResult.effectiveVelocityWindowKmh} km/h) 內 Top ${candidates.length} 筆樣本加權內插並經出手角微調 [MOVEMENT-INFERRED]`,
-    `【反推轉軸 (Estimated Spin Axis)】: ≈ ${finalSpinAxis} (${spinInference.uncertainty.spin_axis_range})，經圓周向量平均 (Circular Interpolation) 推得 [MOVEMENT-INFERRED]`,
+    databaseRanking?`【資料庫轉速候選】: ${finalSpin} RPM；${spinInference.uncertainty.spin_rate_range}；${databaseRanking.projectionUsed?'影像投影匹配':'無足夠球路觀測，低辨識度估計'}`:`【反推轉速 (Estimated Spin Rate)】: ≈ ${finalSpin} RPM (${spinInference.uncertainty.spin_rate_range})，由同球種速度窗口 (±${matcherResult.effectiveVelocityWindowKmh} km/h) 內 Top ${candidates.length} 筆樣本加權內插並經出手角微調 [MOVEMENT-INFERRED]`,
+    databaseRanking?`【資料庫轉軸候選】: ${finalSpinAxis}；${spinInference.uncertainty.spin_axis_range}；不以逆推值覆寫`:`【反推轉軸 (Estimated Spin Axis)】: ≈ ${finalSpinAxis} (${spinInference.uncertainty.spin_axis_range})，經圓周向量平均 (Circular Interpolation) 推得 [MOVEMENT-INFERRED]`,
     `【物理重建閉環驗證 (Physics Reconstruction)】: 以 RPM ${finalSpin} + Axis ${finalSpinAxis} + Gravity + Drag + Magnus 生成 MODEL TRACK；${trajectoryFit.fit_quality==='NOT_VALIDATED'?'無足夠觀測，RMSE未驗證':`RMSE = ${trajectoryFit.rmse_px}px (${trajectoryFit.fit_quality})`}`,
     `【參考資料集 (Database Source)】: PitchVision Synthetic Physics Reference Dataset (Synthetic Physics Prior, 同球種候選 ${matcherResult.matchedRecordCount} 筆)`
   ];

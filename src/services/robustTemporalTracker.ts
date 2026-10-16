@@ -11,6 +11,7 @@ import {
 } from '../types';
 import { BallDetectionEngine } from './ballDetectionEngine';
 import { VideoTimingService } from './videoTimingService';
+import { BallVisualCandidate } from './ballCandidateDetector';
 
 export interface TrackingPipelineOptions {
   releaseFrame: number;
@@ -45,6 +46,35 @@ export interface TrackingPipelineResult {
  * 7. VIDEO TRACK 驗證閘門 (嚴格落實 ACCURACY > COVERAGE，拒絕兩點連線偽造)
  */
 export class RobustTemporalTracker {
+  /** Bounded multi-hypothesis association. Predictions bridge gaps internally;
+   * only detector observations are ever returned as visual evidence. */
+  static associateCandidates(frames:{frame:number;timestamp:number;candidates:BallVisualCandidate[]}[],prior?:(time:number,x:number,y:number)=>number):BallObservation[] {
+    type Path={points:BallObservation[];vx:number;vy:number;score:number};
+    let paths:Path[]=[],best:Path|undefined;
+    for(const frame of frames){
+      const next:Path[]=paths.filter(p=>frame.timestamp-p.points.at(-1)!.timestamp<=.12).map(p=>({...p,score:p.score-.1}));
+      for(const c of frame.candidates){
+        if(!c.isPassedGate)continue;
+        const obs:BallObservation={frame:frame.frame,timestamp:frame.timestamp,x:c.x,y:c.y,x_norm:c.xNorm,y_norm:c.yNorm,radius:c.radius,confidence:c.evidenceScore,source:'observation',motion_score:c.motionResponse};
+        const bonus=.04*(prior?.(frame.timestamp,c.xNorm,c.yNorm)??0);
+        next.push({points:[obs],vx:0,vy:0,score:c.evidenceScore+bonus});
+        for(const p of paths){
+          const last=p.points.at(-1)!,dt=frame.timestamp-last.timestamp;if(dt<=0||dt>.12)continue;
+          const vx=(obs.x_norm-last.x_norm)/dt,vy=(obs.y_norm-last.y_norm)/dt,speed=Math.hypot(vx,vy);
+          const error=Math.hypot(obs.x_norm-last.x_norm-p.vx*dt,obs.y_norm-last.y_norm-p.vy*dt),gate=.025+dt*(p.points.length>1?1.8:5);
+          if(speed>10||p.points.length>1&&error>gate)continue;
+          const acceleration=p.points.length>1?Math.hypot(vx-p.vx,vy-p.vy)/dt:0;
+          if(acceleration>160)continue;
+          next.push({points:[...p.points,obs],vx,vy,score:p.score+c.evidenceScore+.3+bonus-(p.points.length>1?error/gate*.5:0)});
+        }
+      }
+      next.sort((a,b)=>b.score-a.score);
+      // Keep different paths/endpoints, not 16 nearly identical copies of one seed.
+      const seen=new Set<string>();paths=next.filter(p=>{const last=p.points.at(-1)!,first=p.points[0],key=`${first.frame}:${first.x_norm}:${last.frame}:${last.x_norm}:${last.y_norm}`;if(seen.has(key))return false;seen.add(key);return true;}).slice(0,16);
+      if(paths[0]&&(!best||paths[0].score>best.score))best=paths[0];
+    }
+    return best?.points??[];
+  }
   /**
    * 執行雙向追蹤管線
    */

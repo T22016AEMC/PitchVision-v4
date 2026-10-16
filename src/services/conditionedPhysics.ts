@@ -53,3 +53,35 @@ export function forwardProjectedModel(g:CameraGeometry,measurement:ReturnType<ty
  }
  return {modelTrack:track,reconstructedIvbInch:(state[1]-free[1])/0.0254,reconstructedHbInch:(state[0]-free[0])/0.0254};
 }
+
+// V4.5 candidate-only integration. Existing measured-speed and inverse APIs stay unchanged.
+export function integrateCandidateFlight(distance:number,duration:number,height:number,rpm:number,axis:number,efficiency:number){
+ if(![distance,duration,height,rpm,axis,efficiency].every(Number.isFinite)||distance<=0||duration<=0||rpm<0||efficiency<0||efficiency>100)throw Error('無效候選飛行條件');
+ const theta=axis/12*2*Math.PI,active=rpm*efficiency/100;
+ const derivative=(s:number[],spin:number)=>{
+  const [vx,vy,vz]=s.slice(3),speed=Math.hypot(vx,vy,vz),lift=Math.min(.38,1.15*.0366*spin*2*Math.PI/60/Math.max(.001,speed));
+  // Effective transverse spin axis: omega x velocity; no gyro RPM is observable here.
+  const cross=[Math.sin(theta)*vz,Math.cos(theta)*vz,-Math.cos(theta)*vy-Math.sin(theta)*vx],n=Math.hypot(...cross)||1,mag=.0177*lift*speed*speed;
+  return [vx,vy,vz,...cross.map((v,i)=>mag*v/n-kDrag*speed*s[i+3]-(i===1?gravity:0))];
+ };
+ const step=(s:number[],dt:number,spin:number)=>{
+  const a=derivative(s,spin),b=derivative(s.map((v,i)=>v+a[i]*dt/2),spin),c=derivative(s.map((v,i)=>v+b[i]*dt/2),spin),d=derivative(s.map((v,i)=>v+c[i]*dt),spin);
+  return s.map((v,i)=>v+dt*(a[i]+2*b[i]+2*c[i]+d[i])/6);
+ };
+ const run=(vy:number,vz:number,spin:number,samples=false)=>{
+  let s=[0,height,0,0,vy,vz],time=0;const world=[{t:0,x:0,y:height,z:0}];
+  for(let i=1;i<=60;i++){const target=duration*i/60;while(time<target-1e-12){const dt=Math.min(1/240,target-time);s=step(s,dt,spin);time+=dt;}if(samples)world.push({t:target,x:s[0],y:s[1],z:s[2]});}
+  return {s,world};
+ };
+ // Missing initial vectors: solve a common 0.65m glove-height prior plus recorded
+ // distance/time, rather than pretending legacy camera-dependent XY is world data.
+ let vy=(.65-height)/duration+gravity*duration/2,vz=initialLongitudinalVelocity(distance,duration);
+ for(let i=0;i<8;i++){
+  const a=run(vy,vz,active).s,ey=a[1]-.65,ez=a[2]-distance;if(Math.hypot(ey,ez)<1e-11)break;
+  const b=run(vy+.01,vz,active).s,c=run(vy,vz+.01,active).s,A=(b[1]-a[1])/.01,B=(c[1]-a[1])/.01,C=(b[2]-a[2])/.01,D=(c[2]-a[2])/.01,det=A*D-B*C;
+  if(Math.abs(det)<1e-10)throw Error('候選初值求解退化');vy-=(D*ey-B*ez)/det;vz-=(A*ez-C*ey)/det;
+ }
+ const flight=run(vy,vz,active,true),free=run(vy,vz,0).s;
+ if(!flight.s.every(Number.isFinite)||Math.hypot(flight.s[1]-.65,flight.s[2]-distance)>1e-5||vz<=0)throw Error('候選數值積分未收斂');
+ return {world:flight.world,ivb:(flight.s[1]-free[1])/.0254,hb:(flight.s[0]-free[0])/.0254,initialVelocity:[0,vy,vz],initialAngleDeg:Math.atan2(vy,vz)*180/Math.PI};
+}
