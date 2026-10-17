@@ -66,7 +66,7 @@ export const DatabaseModal: React.FC<DatabaseModalProps> = ({ isOpen, onClose, d
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={downloadJson}
               className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition-colors"
@@ -83,7 +83,8 @@ export const DatabaseModal: React.FC<DatabaseModalProps> = ({ isOpen, onClose, d
             </button>
             <button
               onClick={onClose}
-              className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors ml-2"
+              aria-label="關閉參考庫"
+              className="p-1.5 shrink-0 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors ml-2 flex items-center justify-center"
             >
               <X className="w-5 h-5" />
             </button>

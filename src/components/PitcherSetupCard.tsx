@@ -1,287 +1,68 @@
 import React from 'react';
-import { Mountain, Ruler, Footprints, Sparkles, CheckCircle2, Sliders, Info } from 'lucide-react';
-import { PitcherBiometrics } from '../types';
+import {Ruler,Footprints,Mountain} from 'lucide-react';
+import {PitcherBiometrics} from '../types';
 
 interface PitcherSetupCardProps {
-  biometrics: PitcherBiometrics;
-  onChange: (updated: PitcherBiometrics) => void;
-  recomputeBiometrics: (
-    hasMound: boolean,
-    pitcherHeightCm: number,
-    strideOption: 'ai_auto' | 'manual',
-    manualStrideDistanceCm?: number
-  ) => PitcherBiometrics;
+  biometrics:PitcherBiometrics;
+  onChange:(updated:PitcherBiometrics)=>void;
+  recomputeBiometrics:(hasMound:boolean,pitcherHeightCm:number,strideOption:'ai_auto'|'manual',manualStrideDistanceCm?:number)=>PitcherBiometrics;
 }
 
-export const PitcherSetupCard: React.FC<PitcherSetupCardProps> = ({
-  biometrics,
-  onChange,
-  recomputeBiometrics
-}) => {
-  const handleMoundToggle = (hasMound: boolean) => {
-    const updated = recomputeBiometrics(
-      hasMound,
-      biometrics.pitcherHeightCm,
-      biometrics.strideOption,
-      biometrics.manualStrideDistanceCm
-    );
-    onChange(updated);
-  };
+function Stepper({id,label,deltas,onStep}:{id:string;label:string;deltas:number[];onStep:(d:number)=>void}){
+  return <div id={id} className="grid grid-cols-4 gap-1.5">{deltas.map(d=><button key={d} type="button" aria-label={`${label} ${d>0?'+':''}${d} cm`} onClick={()=>onStep(d)} className="btn-step">{d>0?'+':''}{d}</button>)}</div>;
+}
 
-  const handleHeightChange = (height: number) => {
-    if(!Number.isFinite(height))return;
-    const clamped = Math.max(130, Math.min(215, height));
-    const updated = recomputeBiometrics(
-      biometrics.hasMound,
-      clamped,
-      biometrics.strideOption,
-      biometrics.manualStrideDistanceCm
-    );
-    onChange(updated);
-  };
+export const PitcherSetupCard:React.FC<PitcherSetupCardProps>=({biometrics,onChange,recomputeBiometrics})=>{
+  const handleMoundToggle=(hasMound:boolean)=>onChange(recomputeBiometrics(hasMound,biometrics.pitcherHeightCm,biometrics.strideOption,biometrics.manualStrideDistanceCm));
+  const handleHeightChange=(height:number)=>{if(!Number.isFinite(height))return;const clamped=Math.max(130,Math.min(215,height));onChange(recomputeBiometrics(biometrics.hasMound,clamped,biometrics.strideOption,biometrics.manualStrideDistanceCm));};
+  const handleStrideModeChange=(mode:'ai_auto'|'manual')=>onChange(recomputeBiometrics(biometrics.hasMound,biometrics.pitcherHeightCm,mode,biometrics.manualStrideDistanceCm));
+  const handleManualStrideChange=(strideCm:number)=>{if(!Number.isFinite(strideCm))return;const clamped=Math.max(80,Math.min(210,strideCm));onChange(recomputeBiometrics(biometrics.hasMound,biometrics.pitcherHeightCm,'manual',clamped));};
 
-  const handleStrideModeChange = (mode: 'ai_auto' | 'manual') => {
-    const updated = recomputeBiometrics(
-      biometrics.hasMound,
-      biometrics.pitcherHeightCm,
-      mode,
-      biometrics.manualStrideDistanceCm
-    );
-    onChange(updated);
-  };
+  return <div id="initial-pitcher-setup" className="card space-y-4">
+    <div>
+      <h3 className="card-title">投手與距離</h3>
+      <p className="text-xs text-slate-400">身高與跨步推導出手延伸量，再推導出手到進手套的距離。</p>
+    </div>
 
-  const handleManualStrideChange = (strideCm: number) => {
-    if(!Number.isFinite(strideCm))return;
-    const clamped = Math.max(80, Math.min(210, strideCm));
-    const updated = recomputeBiometrics(
-      biometrics.hasMound,
-      biometrics.pitcherHeightCm,
-      'manual',
-      clamped
-    );
-    onChange(updated);
-  };
-
-  return (
-    <div id="initial-pitcher-setup" className="bg-slate-900/90 border border-cyan-500/30 rounded-xl p-4 space-y-3.5 shadow-md">
-      {/* Card Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <div className="w-6 h-6 rounded-lg bg-cyan-500/20 text-cyan-400 flex items-center justify-center font-bold text-xs">
-            0
-          </div>
-          <div>
-            <h3 className="text-xs font-bold text-white flex items-center gap-1.5">
-              <span>初始設置：投手環境與生物力學參數</span>
-              <span className="text-[10px] bg-cyan-950 text-cyan-300 border border-cyan-500/40 px-1.5 py-0.2 rounded font-mono">
-                校正連動
-              </span>
-            </h3>
-            <p className="text-[10.5px] text-slate-400">
-              設定投手丘、身高與跨步，系統將自動同步校正 3D 空間姿態、轉速與轉軸時鐘
-            </p>
-          </div>
-        </div>
-
-        <div className="text-[11px] text-emerald-400 bg-emerald-950/60 border border-emerald-500/30 px-2 py-0.5 rounded-full flex items-center gap-1 font-mono">
-          <CheckCircle2 className="w-3 h-3" />
-          帶入後續校正
-        </div>
+    <div className="space-y-2">
+      <p className="text-sm font-semibold flex items-center gap-1.5 text-blue-200"><Ruler className="w-4 h-4"/>投手身高</p>
+      <div className="flex items-center gap-2">
+        <input id="input-pitcher-height" aria-label="投手身高滑桿" type="range" min="145" max="205" step="1" value={biometrics.pitcherHeightCm} onChange={e=>handleHeightChange(Number(e.target.value))} className="flex-1 accent-blue-500"/>
+        <label className="flex items-center gap-1 text-sm"><input type="number" id="height-number" aria-label="投手身高 (cm)" inputMode="numeric" min="130" max="215" value={biometrics.pitcherHeightCm} onChange={e=>handleHeightChange(Number(e.target.value))} className="field w-20 text-center font-mono"/>cm</label>
       </div>
+      <Stepper id="height-step-controls" label="身高" deltas={[-5,-1,1,5]} onStep={d=>handleHeightChange(biometrics.pitcherHeightCm+d)}/>
+    </div>
 
-      {/* 3 Main Controls in Responsive Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-        {/* 1. 是否有投手丘 (Mound Presence) */}
-        <div className="bg-slate-950/70 p-3 rounded-lg border border-slate-800 space-y-2">
-          <div className="flex items-center justify-between text-xs font-semibold text-slate-300">
-            <span className="flex items-center gap-1.5 text-amber-300">
-              <Mountain className="w-3.5 h-3.5" />
-              1. 是否有投手丘
-            </span>
-            <span className="text-[10.5px] font-mono text-slate-400">
-              {biometrics.hasMound ? '10吋 / 25.4cm' : '0cm (平地)'}
-            </span>
-          </div>
-
-          <div className="grid grid-cols-2 gap-1.5">
-            <button
-              type="button"
-              id="btn-mound-yes"
-              onClick={() => handleMoundToggle(true)}
-              className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all text-center flex items-center justify-center gap-1.5 ${
-                biometrics.hasMound
-                  ? 'bg-amber-500/20 text-amber-300 border border-amber-500/50 shadow-sm'
-                  : 'bg-slate-900 text-slate-400 border border-slate-800 hover:text-slate-200'
-              }`}
-            >
-              <span>🏔️ 標準投手丘</span>
-            </button>
-
-            <button
-              type="button"
-              id="btn-mound-no"
-              onClick={() => handleMoundToggle(false)}
-              className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all text-center flex items-center justify-center gap-1.5 ${
-                !biometrics.hasMound
-                  ? 'bg-amber-500/20 text-amber-300 border border-amber-500/50 shadow-sm'
-                  : 'bg-slate-900 text-slate-400 border border-slate-800 hover:text-slate-200'
-              }`}
-            >
-              <span>🟢 平地投球</span>
-            </button>
-          </div>
-
-          <div className="text-[10.5px] text-slate-400 leading-snug">
-            {biometrics.hasMound
-              ? '✅ 含 25.4cm 坡度落差，增加下坡重力動能與進動俯衝角'
-              : 'ℹ️ 無投手丘落差 (室內牛棚/平地)，轉軸為自然垂直發力面'}
-          </div>
-        </div>
-
-        {/* 2. 投手身高 (Pitcher Height) */}
-        <div className="bg-slate-950/70 p-3 rounded-lg border border-slate-800 space-y-2">
-          <div className="flex items-center justify-between text-xs font-semibold text-slate-300">
-            <span className="flex items-center gap-1.5 text-blue-300">
-              <Ruler className="w-3.5 h-3.5" />
-              2. 投手身高
-            </span>
-            <div className="flex items-baseline gap-1">
-              <span className="text-sm font-bold font-mono text-white">
-                {biometrics.pitcherHeightCm}
-              </span>
-              <span className="text-[10px] text-slate-400">cm</span>
-            </div>
-          </div>
-
+    <div className="space-y-2">
+      <p className="text-sm font-semibold flex items-center gap-1.5 text-emerald-200"><Footprints className="w-4 h-4"/>跨步距離</p>
+      <div className="grid grid-cols-2 gap-2">
+        <button type="button" id="btn-stride-ai" aria-pressed={biometrics.strideOption==='ai_auto'} onClick={()=>handleStrideModeChange('ai_auto')} className={`choice ${biometrics.strideOption==='ai_auto'?'choice-active':''}`}>依身高估算</button>
+        <button type="button" id="btn-stride-manual" aria-pressed={biometrics.strideOption==='manual'} onClick={()=>handleStrideModeChange('manual')} className={`choice ${biometrics.strideOption==='manual'?'choice-active':''}`}>手動輸入</button>
+      </div>
+      {biometrics.strideOption==='ai_auto'
+        ?<p className="text-xs text-emerald-200">估算 {biometrics.effectiveStrideDistanceCm} cm（身高 {biometrics.strideRatioPct}%）</p>
+        :<div className="space-y-2">
           <div className="flex items-center gap-2">
-            <input
-              id="input-pitcher-height"
-              type="range"
-              min="145"
-              max="205"
-              step="1"
-              value={biometrics.pitcherHeightCm}
-              onChange={(e) => handleHeightChange(Number(e.target.value))}
-              className="w-full accent-blue-500 h-1.5 bg-slate-800 rounded-lg cursor-pointer"
-            />
-            <input
-              type="number"
-              id="height-number"
-              min="130"
-              max="215"
-              value={biometrics.pitcherHeightCm}
-              onChange={(e) => handleHeightChange(Number(e.target.value))}
-              className="w-16 bg-slate-900 border border-slate-700 text-white font-mono text-xs px-1.5 py-1 rounded text-center focus:outline-none focus:border-blue-500"
-            />
+            <input id="input-manual-stride" aria-label="跨步距離滑桿" type="range" min="100" max="195" step="1" value={biometrics.effectiveStrideDistanceCm} onChange={e=>handleManualStrideChange(Number(e.target.value))} className="flex-1 accent-emerald-500"/>
+            <label className="flex items-center gap-1 text-sm"><input type="number" id="stride-number" aria-label="跨步距離 (cm)" inputMode="numeric" min="80" max="210" value={biometrics.effectiveStrideDistanceCm} onChange={e=>handleManualStrideChange(Number(e.target.value))} className="field w-20 text-center font-mono"/>cm</label>
           </div>
+          <Stepper id="stride-step-controls" label="跨步" deltas={[-5,-1,1,5]} onStep={d=>handleManualStrideChange(biometrics.effectiveStrideDistanceCm+d)}/>
+          <p className="text-xs text-slate-400">佔身高 {biometrics.strideRatioPct}%</p>
+        </div>}
+    </div>
 
-          <div id="height-step-controls" className="grid grid-cols-4 gap-1.5">
-            {[-5,-1,1,5].map(delta=><button key={delta} type="button" aria-label={`身高 ${delta>0?'+':''}${delta} cm`} onClick={()=>handleHeightChange(biometrics.pitcherHeightCm+delta)} className="rounded border border-slate-700 bg-slate-900 font-bold">{delta>0?'+':''}{delta}</button>)}
-          </div>
-        </div>
-
-        {/* 3. 跨步距離 (Stride Distance) - 選填，也可由AI判斷 */}
-        <div className="bg-slate-950/70 p-3 rounded-lg border border-slate-800 space-y-2">
-          <div className="flex items-center justify-between text-xs font-semibold text-slate-300">
-            <span className="flex items-center gap-1.5 text-emerald-300">
-              <Footprints className="w-3.5 h-3.5" />
-              3. 跨步距離
-            </span>
-            <span className="text-[10px] text-slate-400 font-mono">
-              選填 / 可由AI判斷
-            </span>
-          </div>
-
-          {/* Mode Tabs */}
-          <div className="grid grid-cols-2 gap-1 bg-slate-900 p-0.5 rounded-lg border border-slate-800 text-[11px]">
-            <button
-              type="button"
-              id="btn-stride-ai"
-              onClick={() => handleStrideModeChange('ai_auto')}
-              className={`py-1 rounded text-center font-medium transition-all flex items-center justify-center gap-1 ${
-                biometrics.strideOption === 'ai_auto'
-                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Sparkles className="w-3 h-3 text-emerald-400" />
-              <span>AI 自動判斷</span>
-            </button>
-
-            <button
-              type="button"
-              id="btn-stride-manual"
-              onClick={() => handleStrideModeChange('manual')}
-              className={`py-1 rounded text-center font-medium transition-all flex items-center justify-center gap-1 ${
-                biometrics.strideOption === 'manual'
-                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Sliders className="w-3 h-3 text-emerald-400" />
-              <span>手動自訂</span>
-            </button>
-          </div>
-
-          {biometrics.strideOption === 'ai_auto' ? (
-            <div className="bg-emerald-950/30 border border-emerald-500/20 rounded p-1.5 text-[10.5px] text-emerald-300/90 flex items-center justify-between">
-              <span className="flex items-center gap-1">
-                <Sparkles className="w-3 h-3 text-emerald-400" />
-                AI 估算：<strong>{biometrics.effectiveStrideDistanceCm} cm</strong>
-              </span>
-              <span className="font-mono text-[10px] text-emerald-400/80">
-                約佔身高 {biometrics.strideRatioPct}%
-              </span>
-            </div>
-          ) : (
-            <div className="space-y-1">
-              <div className="flex items-center gap-2">
-                <input
-                  id="input-manual-stride"
-                  type="range"
-                  min="100"
-                  max="195"
-                  step="1"
-                  value={biometrics.effectiveStrideDistanceCm}
-                  onChange={(e) => handleManualStrideChange(Number(e.target.value))}
-                  className="w-full accent-emerald-500 h-1.5 bg-slate-800 rounded-lg cursor-pointer"
-                />
-                <input
-                  type="number"
-                  id="stride-number"
-                  min="80"
-                  max="210"
-                  value={biometrics.effectiveStrideDistanceCm}
-                  onChange={(e) => handleManualStrideChange(Number(e.target.value))}
-                  className="w-16 bg-slate-900 border border-slate-700 text-white font-mono text-xs px-1.5 py-1 rounded text-center focus:outline-none focus:border-emerald-500"
-                />
-              </div>
-              <div id="stride-step-controls" className="grid grid-cols-4 gap-1.5">
-                {[-5,-1,1,5].map(delta=><button key={delta} type="button" aria-label={`跨步 ${delta>0?'+':''}${delta} cm`} onClick={()=>handleManualStrideChange(biometrics.effectiveStrideDistanceCm+delta)} className="rounded border border-slate-700 bg-slate-900 font-bold">{delta>0?'+':''}{delta}</button>)}
-              </div>
-              <div className="text-[10px] text-slate-400 flex justify-between">
-                <span>佔身高比例: <strong className="text-emerald-300 font-mono">{biometrics.strideRatioPct}%</strong></span>
-                <span>跨步越大 ➜ 轉速扭矩加乘</span>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Dynamic Biomechanical & Spatial Preview Bar */}
-      <div className="bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2 text-[11px] flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-1.5 text-slate-300">
-          <Info className="w-3.5 h-3.5 text-cyan-400" />
-          <span className="text-slate-400">衍生物理幾何：</span>
-          <span>延伸量 (Ext): <strong className="text-cyan-300 font-mono">{biometrics.calculatedExtensionM} m</strong></span>
-          <span className="text-slate-600">|</span>
-          <span>進手套實測距離: <strong className="text-white font-mono">{biometrics.effectiveTravelDistanceM} m</strong></span>
-        </div>
-
-        <div className="text-[10.5px] text-amber-300/90 font-medium flex items-center gap-1">
-          <span>🎯 轉軸方位角 ＋ 轉速 (RPM) 均將帶入校正運算</span>
-        </div>
+    <div className="space-y-2">
+      <p className="text-sm font-semibold flex items-center gap-1.5 text-amber-200"><Mountain className="w-4 h-4"/>投手丘</p>
+      <div className="grid grid-cols-2 gap-2">
+        <button type="button" id="btn-mound-no" aria-pressed={!biometrics.hasMound} onClick={()=>handleMoundToggle(false)} className={`choice ${!biometrics.hasMound?'choice-active':''}`}>平地投球</button>
+        <button type="button" id="btn-mound-yes" aria-pressed={biometrics.hasMound} onClick={()=>handleMoundToggle(true)} className={`choice ${biometrics.hasMound?'choice-active':''}`}>標準投手丘 25.4 cm</button>
       </div>
     </div>
-  );
+
+    <dl id="derived-distance" className="grid grid-cols-2 gap-2 text-sm">
+      <div className="stat"><dt>出手延伸量</dt><dd>{biometrics.calculatedExtensionM} m</dd></div>
+      <div className="stat"><dt>出手→進手套距離</dt><dd className="text-cyan-200">{biometrics.effectiveTravelDistanceM} m</dd></div>
+    </dl>
+    <p className="text-[11px] text-slate-400">距離＝18.44 m − 延伸量 + 0.90 m（V4.7 引擎公式，以標準投手板距離為基準）。地面有已知長度標記時，可在「標記」步驟的選填校正輸入實際長度。</p>
+  </div>;
 };
