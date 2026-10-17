@@ -22,3 +22,14 @@ jobs:
             exit 0
           fi
           curl --fail --silent --show-error --output /dev/null "${RENDER_DEPLOY_HOOK}&ref=${GITHUB_SHA}"
+      - name: Deploy verified push to Render (mobile site)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/mobile-v5'
+        env:
+          RENDER_DEPLOY_HOOK_MOBILE: ${{ secrets.RENDER_DEPLOY_HOOK_MOBILE }}
+        run: |
+          if [ -z "$RENDER_DEPLOY_HOOK_MOBILE" ]; then
+            echo '::notice title=沒有自動部署::RENDER_DEPLOY_HOOK_MOBILE 未設定；mobile-v5 已通過 verify 與 build，但沒有自動部署。'
+            echo '沒有自動部署：RENDER_DEPLOY_HOOK_MOBILE is not configured.'
+            exit 0
+          fi
+          curl --fail --silent --show-error --output /dev/null "${RENDER_DEPLOY_HOOK_MOBILE}&ref=${GITHUB_SHA}"
