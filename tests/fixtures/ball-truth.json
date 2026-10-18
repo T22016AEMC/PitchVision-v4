@@ -1,5 +1,5 @@
 {
-  "description": "Hand-confirmed ball positions for the two local test clips. Coordinates only (no images). Pixel coordinates are in the 720x1280 converted .mp4; the iPhone .mov originals are the same picture at 3x (multiply by 3). Frame numbers start at 0 and refer to the container-timestamp order (first frame = F0).",
+  "description": "Hand-confirmed ball positions for the two local test clips. Coordinates only (no images). Pixel coordinates are in the 720x1280 converted .mp4; the iPhone .mov originals are the same picture at 3x (multiply by 3). Frame numbers start at 0 and refer to the container-timestamp order (first frame = F0). Event marks (events) are the owner's manual marks.",
   "coordinateSpace": {
     "width": 720,
     "height": 1280
@@ -17,9 +17,9 @@
         "note": "F126 the ball is still in the hand; release is between F126 and F127"
       },
       "evaluationWindow": {
-        "first": 124,
+        "first": 125,
         "last": 147,
-        "note": "release - 2 frames to the last confirmed point; frames after F147 are not scored"
+        "note": "tracker window used for evaluation: release F127 - 2 .. F147 (glove input 142 so that the window covers every confirmed point)"
       },
       "confirmed": [
         {
@@ -68,6 +68,42 @@
           "y": 657
         },
         {
+          "frame": 137,
+          "x": 382,
+          "y": 664,
+          "note": "owner-confirmed by zoomed review (+-2 px); previously listed as contested"
+        },
+        {
+          "frame": 138,
+          "x": 382,
+          "y": 662,
+          "note": "owner-confirmed by zoomed review (+-2 px); previously listed as contested"
+        },
+        {
+          "frame": 139,
+          "x": 385,
+          "y": 662,
+          "note": "owner-confirmed by zoomed review (+-2 px); previously listed as contested"
+        },
+        {
+          "frame": 140,
+          "x": 386,
+          "y": 665,
+          "note": "owner-confirmed by zoomed review (+-2 px); previously listed as contested"
+        },
+        {
+          "frame": 141,
+          "x": 388,
+          "y": 666,
+          "note": "owner-confirmed by zoomed review (+-2 px); previously listed as contested"
+        },
+        {
+          "frame": 142,
+          "x": 390,
+          "y": 671,
+          "note": "owner-confirmed by zoomed review (+-2 px); previously listed as contested"
+        },
+        {
           "frame": 143,
           "x": 391,
           "y": 675
@@ -93,66 +129,27 @@
           "y": 709
         }
       ],
-      "hidden": [],
-      "segments": "F127-F136 flight toward the net, F137-F142 slow drift beside the net (contested, see contested), F143-F147 falling along the net",
-      "tolerancePx720": 3,
-      "contested": [
+      "hidden": [
         {
-          "frameFirst": 137,
-          "frameLast": 142,
-          "userStatement": "hidden by the pitcher's follow-through (as given with the original truth)",
-          "reviewNote": "Review at 6x zoom of the 720p clip: a white ball is visible in every one of these frames, to the right of the black bag, creeping right/down: approx F137 (382,663), F138 (383,662), F139 (384,662), F140 (386,664), F141 (388,667), F142 (390,670). The pitcher's leg crosses the right edge but not the ball. Awaiting the owner's confirmation. Until then detections in these frames count as neither hits nor false positives.",
-          "reviewedPositions720": [
-            [
-              137,
-              382,
-              663
-            ],
-            [
-              138,
-              383,
-              662
-            ],
-            [
-              139,
-              384,
-              662
-            ],
-            [
-              140,
-              386,
-              664
-            ],
-            [
-              141,
-              388,
-              667
-            ],
-            [
-              142,
-              390,
-              670
-            ]
-          ]
-        },
-        {
-          "frameFirst": 132,
-          "frameLast": 132,
-          "userStatement": "hidden behind the fence wire (as given with the original truth)",
-          "reviewNote": "Review of the 4K original at 10x zoom: a cream-coloured ball is visible at approx (374,627) in F132, exactly on the path between F131 (372,619) and F133 (373,633); the fence mesh only overlays it. Awaiting the owner's confirmation; detections here count as neither hits nor false positives.",
-          "reviewedPositions720": [
-            [
-              132,
-              374,
-              627
-            ]
-          ]
+          "frame": 132,
+          "reason": "behind the fence wire (owner's statement). Note: a zoomed review of the 4K original shows a ball-coloured blob near (374,627) in this frame; it stays unscored (neither hit nor false positive)."
         }
       ],
+      "segments": "F127-F136 flight toward the net, F137-F142 slow drift beside the pitcher's glove/arm toward the net, F143-F147 falling along the net",
+      "tolerancePx720": 3,
+      "contested": [],
       "releaseNote": "Pre-release frames F124-F125 have no visible ball; F126 the ball is in the hand (position not given): detections at F126 are neutral, at F124-F125 count as false positives.",
       "neutral": [
-        126
-      ]
+        126,
+        132
+      ],
+      "events": {
+        "release": 127,
+        "glove": 139,
+        "flightFrames": 12,
+        "rule": "release = first frame the ball has left the hand; glove = first frame the ball reaches the net",
+        "use": "recorded as the baseline for later event fitting only; not used for any speed or physics calculation this round"
+      }
     },
     "knuckle": {
       "files": [
@@ -166,9 +163,9 @@
         "note": "approximately F96-F97; the camera rotates around the release"
       },
       "evaluationWindow": {
-        "first": 94,
-        "last": 101,
-        "note": "scored strictly only up to F101; see uncertain"
+        "first": 95,
+        "last": 116,
+        "note": "tracker window with the owner's event marks (release F97 - 2 .. glove F111 + 5); confirmed points F97-F111"
       },
       "confirmed": [
         {
@@ -197,13 +194,73 @@
           "frame": 101,
           "x": 366,
           "y": 574
+        },
+        {
+          "frame": 102,
+          "x": 366,
+          "y": 583,
+          "note": "read by eye at 6x zoom on the 4K original (+-2-3 px). The ball is a cream-coloured blob falling in front of a distant person"
+        },
+        {
+          "frame": 103,
+          "x": 369,
+          "y": 592,
+          "note": "read by eye at 6x zoom on the 4K original (+-2-3 px). The ball is a cream-coloured blob falling in front of a distant person"
+        },
+        {
+          "frame": 104,
+          "x": 371,
+          "y": 600,
+          "note": "read by eye at 6x zoom on the 4K original (+-2-3 px). The ball is a cream-coloured blob falling in front of a distant person"
+        },
+        {
+          "frame": 105,
+          "x": 372,
+          "y": 608,
+          "note": "read by eye at 6x zoom on the 4K original (+-2-3 px). The ball is a cream-coloured blob falling in front of a distant person"
+        },
+        {
+          "frame": 106,
+          "x": 372,
+          "y": 617,
+          "note": "read by eye at 6x zoom on the 4K original (+-2-3 px). The ball is a cream-coloured blob falling in front of a distant person"
+        },
+        {
+          "frame": 107,
+          "x": 373,
+          "y": 625,
+          "note": "read by eye at 6x zoom on the 4K original (+-2-3 px). The ball is a cream-coloured blob falling in front of a distant person"
+        },
+        {
+          "frame": 108,
+          "x": 373,
+          "y": 634,
+          "note": "read by eye at 6x zoom on the 4K original (+-2-3 px). The ball is a cream-coloured blob falling in front of a distant person"
+        },
+        {
+          "frame": 109,
+          "x": 373,
+          "y": 640,
+          "note": "read by eye at 6x zoom on the 4K original (+-2-3 px). The ball is a cream-coloured blob falling in front of a distant person; faintest of the group"
+        },
+        {
+          "frame": 110,
+          "x": 374,
+          "y": 650,
+          "note": "read by eye at 6x zoom on the 4K original (+-2-3 px). The ball is a cream-coloured blob falling in front of a distant person"
+        },
+        {
+          "frame": 111,
+          "x": 372,
+          "y": 648,
+          "note": "read by eye at 6x zoom on the 4K original (+-2-3 px). The ball is a cream-coloured blob falling in front of a distant person; partly beside a dark object (the pitcher's foot/glove) entering from below"
         }
       ],
       "uncertain": [
         {
-          "frameFirst": 102,
+          "frameFirst": 112,
           "frameLast": 113,
-          "reason": "the ball falls in front of a distant person (olive/yellow clothing) and then the pitcher's leg enters; at 4x zoom the ball cannot be told apart from the clothing, so no position is asserted and detections in these frames are neither counted as hits nor as false positives"
+          "reason": "after the net mark (F111): a dark object (the pitcher's foot/glove) covers the area where the ball is, so no position is asserted; detections here are neither hits nor false positives"
         }
       ],
       "distractors": [
@@ -213,7 +270,16 @@
           "frameLast": 130
         }
       ],
-      "tolerancePx720": 3
+      "tolerancePx720": 3,
+      "events": {
+        "release": 97,
+        "glove": 111,
+        "flightFrames": 14,
+        "rule": "release = first frame the ball has left the hand; glove = first frame the ball reaches the net",
+        "use": "recorded as the baseline for later event fitting only; not used for any speed or physics calculation this round",
+        "sameSession": "both clips were thrown the same day, at the same place, into the same net"
+      },
+      "whyOnlyFivePointsBefore": "At the first review (720p converted clip) the ball from F102 on fell in front of a distant person in olive/yellow clothing and could not be told apart from the clothing. At 6x zoom on the 4K original the ball is separable (a cream-coloured blob). Camera rotation was not the cause (the background is static F94-F111); motion blur affects F97-F98; the pitcher's foot/glove enters from below from about F107 and sits next to the ball at F110-F111."
     }
   }
 }

@@ -76,4 +76,16 @@ async function synthEncode(opts:any){
   await encoder.flush();encoder.close();if(error)throw Error(error);
   return {width,height,fps,chunks,config,pts,truth:scene.truth,release:scene.release,glove:scene.glove,view:scene.view,frames};
 }
-window.__pv={runNew,runOld,synthEncode,open,frame:async(i:number)=>{const f=await frame(i);return {width:f.width,height:f.height,verified:f.verified,time:f.time};},sheet,getFrame:frame,get times(){return times;},get source(){return source;}};
+/** Frame-capture self-check: every frame of a range captured by sequential playback vs by seeking. */
+async function compareCapture(first:number,last:number){
+  if(!source)throw Error('not open');
+  const seq=await (source as any).captureRange(first,last);
+  const out:any[]=[];
+  for(const f of seq){
+    const g=await source.capture(f.index);if(!g){out.push({index:f.index,error:'seek failed'});continue;}
+    let d=0;const n=f.data.length;for(let i=0;i<n;i+=16)d+=Math.abs(f.data[i]-g.data[i]);
+    out.push({index:f.index,meanAbsDiff:+(d/(n/16)).toFixed(2)});
+  }
+  return {requested:last-first+1,sequentialGot:seq.length,frames:out};
+}
+window.__pv={compareCapture,runNew,runOld,synthEncode,open,frame:async(i:number)=>{const f=await frame(i);return {width:f.width,height:f.height,verified:f.verified,time:f.time};},sheet,getFrame:frame,get times(){return times;},get source(){return source;}};
