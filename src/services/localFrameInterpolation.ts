@@ -1,5 +1,7 @@
 import {TimePosition} from './analysisTimeline';
 import {PixelFrame,InterpolationQuality} from './motionInterpolation';
+/** Preview frames are at most this many pixels on the long side. */
+export const PREVIEW_LONG_SIDE=1920;
 interface Captured extends PixelFrame { mediaTime?:number; index:number }
 export interface PreviewFrame extends PixelFrame {quality:InterpolationQuality; sourceMediaTimes:(number|undefined)[]; sourceIndices:number[];changedA:number;changedB:number;motionWidth:number;motionHeight:number;estimateMs:number;synthesisMs:number}
 
@@ -54,9 +56,11 @@ export class LocalFrameInterpolation {
     // No compositor metadata means seek precision cannot be independently verified.
     if(mediaTime!==undefined && Math.abs(mediaTime-t)>Math.max(0.004,span*0.2))throw Error('瀏覽器呈現時刻與指定原始PTS不符，停止補幀；可退回原始模式');
     await new Promise<void>(r=>requestAnimationFrame(()=>requestAnimationFrame(()=>r())));
-    if(v.videoWidth*v.videoHeight>4_194_304)throw Error('來源畫面超出本機補幀記憶體預算（約4百萬像素）；未降低來源畫質，請使用原始影格');
+    // Large sources (e.g. iPhone 4K, ~8.3 MP) are scaled to a long side of about 1920 first. The result is a visual
+    // preview only; the original frames are untouched and the preview is never an observation.
+    const k=Math.min(1,PREVIEW_LONG_SIDE/Math.max(v.videoWidth,v.videoHeight));
     const canvas=document.createElement('canvas');
-    canvas.width=v.videoWidth;canvas.height=v.videoHeight;
+    canvas.width=Math.max(1,Math.round(v.videoWidth*k));canvas.height=Math.max(1,Math.round(v.videoHeight*k));
     const ctx=canvas.getContext('2d',{willReadFrequently:true});if(!ctx)throw Error('無法讀取局部影像');ctx.drawImage(v,0,0,canvas.width,canvas.height);
     const frame={width:canvas.width,height:canvas.height,data:ctx.getImageData(0,0,canvas.width,canvas.height).data,index,mediaTime};
     this.frames.set(index,frame);while(this.frames.size>2&&([...this.frames.values()].reduce((n,f)=>n+f.data.byteLength,0)>32*1024*1024||this.frames.size>4))this.frames.delete(this.frames.keys().next().value!);return frame;

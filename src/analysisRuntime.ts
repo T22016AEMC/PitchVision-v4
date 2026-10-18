@@ -9,6 +9,8 @@ import {VideoTimingService} from './services/videoTimingService';
 import {PITCH_DATABASE,PITCH_TYPE_OPTIONS,calculateVelocity,matchPitchData,analyzePitchFramesFrameByFrame,FrameDetectionResult} from './matchingEngine';
 import {CameraViewMode,PitcherBiometrics,BaseballTrackPoint,VideoTrackMetrics,UnifiedConfidenceScores,ManualAnchorInput,VideoTiming,MatchResult} from './types';
 import {trackBaseballSparse} from './baseballTracker';
+import {trackWithNewModule} from './services/pitchBallAdapter';
+import type {BallTrackRun,BallAnchor} from './services/pitchBallTracker';
 import {createDatabaseSearchPrior} from './services/projectedDatabaseMatcher';
 import {standardCameras} from './services/standardCamera';
 import {validateAndReconstructVideoTrack} from './services/trajectoryValidationService';
@@ -44,6 +46,18 @@ export interface AnalysisInput {
   hasAiDetection:boolean;
   autoDetectConfidence?:number;
   isCancelled:()=>boolean;
+  /** Points the user tapped or confirmed (forced anchors for the new ball finder). */
+  userPoints?:BallAnchor[];
+  /** Frames the user marked "no ball here". */
+  noBallFrames?:number[];
+}
+
+/** What the new ball finder reported, for the UI (counts, status, per-frame points, timing). */
+export interface BallTrackSummary{
+  engine:'new'|'old';status:BallTrackRun['status']|'old_detector';message:string;
+  observedCount:number;estimatedCount:number;
+  points:{frame:number;timeSec:number;xNorm:number;yNorm:number;source:'observation'|'estimated'|'user'}[];
+  tripodAdvised:boolean;maxShiftFrac:number;work:string|null;ms:number;
 }
 
 export interface AnalysisHooks {
@@ -58,7 +72,7 @@ export interface AnalysisHooks {
 export type AnalysisOutcome=
   | {status:'done';result:MatchResult;velocityKmh:number;flightSeconds:number;flightFrames:number;
      /** Raw per-frame ball detections inside the marked window; display only, never fed back into the engine. */
-     detections:BaseballTrackPoint[];trackingRan:boolean}
+     detections:BaseballTrackPoint[];trackingRan:boolean;ballTrack:BallTrackSummary|null}
   | {status:'stale';message?:string};
 
 const pause=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
@@ -74,35 +88,42 @@ export async function runPitchAnalysis(input:AnalysisInput,hooks:AnalysisHooks):
 
   hooks.onProgress(10,`【步驟 1/6】鎖定出手 ${events.release!.timeSec.toFixed(6)}s 與進手套 ${events.glove!.timeSec.toFixed(6)}s...`);
 
-  // 步驟 2: 運動差分候選、時間走廊追蹤與稀疏觀測點擷取
+  // 步驟 2: 找球。新找球模組優先；只有它發生技術性失敗（例外）時才回退到舊追蹤器。
   let sparseResult=null;
   let trackingFailure:string|null=null;
+  let ballTrack:BallTrackSummary|null=null;
   if(useExistingTracking&&sourceTimesValid&&videoTiming?.timeBase==='timestamp'&&video){
-    hooks.onProgress(20,`【步驟 2/6】執行 ${formatSourceFps(videoFps)} FPS 差分運動偵測與時間走廊追蹤...`);
+    const sourceRelease=sourceIndexAt(videoTiming.timestamps,events.release!.timeSec),sourceCatch=sourceIndexAt(videoTiming.timestamps,events.glove!.timeSec);
+    hooks.onProgress(20,`【步驟 2/6】尋找影片中的球（對齊畫面、建立背景、物理連線）...`);
     try{
-      const geometry=cameraGeometry??standardCameras(cameraViewMode,video.videoWidth,video.videoHeight,analysisDistance)[0];
-      // Yield before bounded candidate integration; the UI can paint progress first.
-      await pause(0);
-      const searchPrior=createDatabaseSearchPrior(PITCH_DATABASE,velocityKmh,selectedPitchType,cameraViewMode,{releaseTimeSec:events.release!.timeSec,flightTimeSec:flightSeconds,distanceM:analysisDistance,geometry});
-      const sourceRelease=sourceIndexAt(videoTiming.timestamps,events.release!.timeSec),sourceCatch=sourceIndexAt(videoTiming.timestamps,events.glove!.timeSec);
-      sparseResult=await trackBaseballSparse(video,{
-        releaseFrame:sourceRelease,
-        visibleEndFrame:sourceCatch,
-        releaseTimeSec:events.release!.timeSec,catchTimeSec:events.glove!.timeSec,searchPrior,
-        isCancelled,
-        catchFrame:sourceCatch,
-        fps:videoFps,
-        cameraView:cameraViewMode,
-        manualAnchor:manualAnchor||undefined,
-        timestamps:videoTiming?.timestamps,
-        onProgress:(pct,_curF,stageText)=>{
-          if(isCancelled())return;
-          hooks.onProgress(Math.round(20+pct*0.3),`【步驟 2/6】${stageText}`);
-        }
+      const out=await trackWithNewModule({
+        videoUrl:video.currentSrc||video.src,times:videoTiming.timestamps,releaseFrame:sourceRelease,catchFrame:sourceCatch,fps:videoFps,view:cameraViewMode,
+        sourceWidth:video.videoWidth||videoTiming.width,sourceHeight:video.videoHeight||videoTiming.height,
+        userPoints:input.userPoints,noBallFrames:input.noBallFrames,isCancelled,
+        onProgress:(pct,text)=>{if(isCancelled())return;hooks.onProgress(Math.round(20+pct*0.3),`【步驟 2/6】${text}`);}
       });
+      sparseResult=out.sparse;
+      ballTrack={engine:'new',status:out.run.status,message:out.run.message,observedCount:out.run.observedCount,estimatedCount:out.run.estimatedCount,
+        points:out.run.points.map(p=>({frame:p.frame,timeSec:p.time,xNorm:p.xNorm,yNorm:p.yNorm,source:p.source})),
+        tripodAdvised:out.run.camera.tripodAdvised,maxShiftFrac:out.run.camera.maxShiftFrac,work:`${out.run.source.workWidth}x${out.run.source.workHeight}`,ms:Math.round(out.run.captureMs+out.run.stats.ms)};
     }catch(err){
-      trackingFailure=`視覺追蹤未完成：${err instanceof Error?err.message:'解碼或搜尋不可用'}；保留手動分析。`;
-      console.warn('Sparse baseball tracking fallback:',err);
+      if(isCancelled())return {status:'stale'};
+      console.warn('New ball finder failed; falling back to the old tracker:',err);
+      // 回退：舊的運動差分候選＋時間走廊追蹤器
+      try{
+        const geometry=cameraGeometry??standardCameras(cameraViewMode,video.videoWidth,video.videoHeight,analysisDistance)[0];
+        await pause(0);
+        const searchPrior=createDatabaseSearchPrior(PITCH_DATABASE,velocityKmh,selectedPitchType,cameraViewMode,{releaseTimeSec:events.release!.timeSec,flightTimeSec:flightSeconds,distanceM:analysisDistance,geometry});
+        sparseResult=await trackBaseballSparse(video,{
+          releaseFrame:sourceRelease,visibleEndFrame:sourceCatch,releaseTimeSec:events.release!.timeSec,catchTimeSec:events.glove!.timeSec,searchPrior,
+          isCancelled,catchFrame:sourceCatch,fps:videoFps,cameraView:cameraViewMode,manualAnchor:manualAnchor||undefined,timestamps:videoTiming?.timestamps,
+          onProgress:(pct,_curF,stageText)=>{if(isCancelled())return;hooks.onProgress(Math.round(20+pct*0.3),`【步驟 2/6】${stageText}`);}
+        });
+        ballTrack={engine:'old',status:'old_detector',message:'新找球模組無法執行，已改用舊偵測器。',observedCount:sparseResult.observations.length,estimatedCount:0,points:sparseResult.observations.map(o=>({frame:o.frame,timeSec:o.timestamp,xNorm:o.x_norm,yNorm:o.y_norm,source:'observation' as const})),tripodAdvised:false,maxShiftFrac:0,work:null,ms:0};
+      }catch(err2){
+        trackingFailure=`視覺追蹤未完成：${err2 instanceof Error?err2.message:'解碼或搜尋不可用'}；保留手動分析。`;
+        console.warn('Sparse baseball tracking fallback:',err2);
+      }
     }
   }
 
@@ -178,5 +199,5 @@ export async function runPitchAnalysis(input:AnalysisInput,hooks:AnalysisHooks):
   computed.tracking_evidence=sparseResult?.evidence??{sourceFrames:0,attemptedFrames:0,verifiedFrames:0,unverifiedFrames:0,observationCount:0,excludedFrames:0,trackFound:false,trackReliable:false,reason:trackingMessage};
   computed.confidence_scores.quality_notes.push(trackingMessage);
   const detections=(sparseResult?.observations||[]).filter(p=>p.timestamp>=events.release!.timeSec&&p.timestamp<=events.glove!.timeSec);
-  return {status:'done',result:computed,velocityKmh,flightSeconds,flightFrames,detections,trackingRan:Boolean(sparseResult)};
+  return {status:'done',result:computed,velocityKmh,flightSeconds,flightFrames,detections,trackingRan:Boolean(sparseResult),ballTrack};
 }
