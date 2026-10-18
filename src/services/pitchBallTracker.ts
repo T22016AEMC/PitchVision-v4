@@ -21,6 +21,8 @@ export interface BallTrackOptions{
   fps:number;view:BallView;anchors?:BallAnchor[];
   /** The user's release mark (source frame index). Chain nodes more than one frame before it are dropped. */
   releaseFrame?:number;
+  /** Frames the user marked "no ball here": candidates on them are discarded (the frame can only be estimated). */
+  noBallFrames?:number[];
   /** Brightness a pixel must exceed the local background maximum by, in every channel (0–255). */
   contrastThreshold?:number;
   /** @internal experiments only: smoothing levels (opening radii in px at 1280 long side). */
@@ -113,9 +115,10 @@ function estimateShift(ref:ReturnType<typeof pyramid>,cur:ReturnType<typeof pyra
   if(bx!==0||by!==0){const atCoarse=search(bx,by);if(atCoarse.cost<atZero.cost*.85)chosen=atCoarse;}
   return {dx:chosen.dx,dy:chosen.dy,cost:chosen.cost,limit:R*(1<<top)};
 }
-function median(values:number[],n:number){
+/** Order statistic of the first n values (insertion sort; n is at most about 8). */
+function percentile(values:number[],n:number,q:number){
   for(let i=1;i<n;i++){const v=values[i];let j=i-1;while(j>=0&&values[j]>v){values[j+1]=values[j];j--;}values[j+1]=v;}
-  return n&1?values[n>>1]:(values[(n>>1)-1]+values[n>>1])>>1;
+  return values[Math.min(n-1,Math.floor(q*(n-1)+.5))];
 }
 /** Separable (2r+1)² max / min filters (specialised, no indirect calls in the inner loops). */
 function dilateMax(src:Uint8Array,w:number,h:number,r:number){
@@ -189,8 +192,16 @@ function components(E:Uint8Array,P:Planes,T:number,minArea:number,maxArea:number
     const ecc=Math.sqrt(l1/l2),bw=maxX-minX+1,bh=maxY-minY+1,fill=area/(bw*bh);
     if(ecc>7||fill<.3)continue;
     const mean=sumE/area,white=whiteSum/area/255,r=Math.sqrt(area/Math.PI);
+    // Isolation: a ball sits in an empty neighbourhood; the edge fragment of a large moving object (a person's shirt)
+    // has "new" pixels all around it. Fraction of changed pixels in the ring 1.6r … 3r around the blob.
+    const ringLo=1.6*r,ringHi=3*r+1,thr2=Math.max(8,T*.5);let ringN=0,ringHit=0;
+    for(let yy=Math.max(0,Math.floor(cy-ringHi));yy<=Math.min(h-1,Math.ceil(cy+ringHi));yy++)for(let xx=Math.max(0,Math.floor(cx-ringHi));xx<=Math.min(w-1,Math.ceil(cx+ringHi));xx++){
+      const d=Math.hypot(xx-cx,yy-cy);if(d<ringLo||d>ringHi)continue;ringN++;if(E[yy*w+xx]>=thr2)ringHit++;
+    }
+    const crowded=ringN?ringHit/ringN:0;
+    if(crowded>.5)continue;
     // unary evidence: contrast over background, whiteness, compactness, roundness
-    const u=1.3*Math.log2(1+mean/T)+0.9*white+0.6*Math.min(1,fill/.6)-0.35*Math.log2(ecc)+0.4*Math.log2(1+peak/T)/2;
+    const u=1.3*Math.log2(1+mean/T)+0.9*white+0.6*Math.min(1,fill/.6)-0.35*Math.log2(ecc)+0.4*Math.log2(1+peak/T)/2-3*Math.max(0,crowded-.12);
     out.push({frame,x:cx,y:cy,r,area,peak,mean,white,u,forced:false,user:false});
   }
   return out;
@@ -249,6 +260,11 @@ function linkChain(nodes:Node[],frames:number,p:LinkParams){
   return {chain,score:bestVal};
 }
 
+/** Background brightness = a high percentile (not the median) of the aligned outside frames: wherever a white object
+ *  (a person's shirt, a hand) was present in several of them, a bright pixel is not "new". Moving people then leave no
+ *  ball-like edge fragments behind, and the small ball is still new. */
+const BG_QUANTILE=0.75;
+
 // ───────────────────────── main entry ─────────────────────────
 const clamp=(v:number,a:number,b:number)=>Math.max(a,Math.min(b,v));
 export function analyzeBallFrames(win:PFrame[],bg:PFrame[],opts:BallTrackOptions):BallTrackResult{
@@ -266,7 +282,8 @@ export function analyzeBallFrames(win:PFrame[],bg:PFrame[],opts:BallTrackOptions
   const winPl=win.map(planes),refPyr=pyramid(winPl[0].gray,w,h);
   const shifts=[{dx:0,dy:0}];let limitHit=false;
   for(let i=1;i<win.length;i++){const s=estimateShift(refPyr,pyramid(winPl[i].gray,w,h),maxFrac);shifts.push({dx:s.dx,dy:s.dy});if(Math.max(Math.abs(s.dx),Math.abs(s.dy))>=s.limit-1)limitHit=true;}
-  const bgShifts=bg.map(f=>{const s=estimateShift(refPyr,pyramid(planes(f).gray,w,h),maxFrac);if(Math.max(Math.abs(s.dx),Math.abs(s.dy))>=s.limit-1)limitHit=true;return {dx:s.dx,dy:s.dy};});
+  const bgPl=bg.map(planes);
+  const bgShifts=bgPl.map(P=>{const s=estimateShift(refPyr,pyramid(P.gray,w,h),maxFrac);if(Math.max(Math.abs(s.dx),Math.abs(s.dy))>=s.limit-1)limitHit=true;return {dx:s.dx,dy:s.dy};});
 
   lap('shift');
   const maxShift=Math.max(0,...shifts.map(s=>Math.hypot(s.dx,s.dy)));
@@ -276,11 +293,11 @@ export function analyzeBallFrames(win:PFrame[],bg:PFrame[],opts:BallTrackOptions
   if(limitHit||camera.maxShiftFrac>.08)return empty('camera_motion_too_large','畫面晃動太大，請使用腳架或固定手機後重拍。',{camera});
 
   // 3. background (median of aligned outside frames) and its dilated maximum
-  const bgPl=bg.map(planes),n=w*h,BW=new Uint8Array(n),vw=new Array<number>(bg.length);
+  const n=w*h,BW=new Uint8Array(n),vw=new Array<number>(bg.length);
   for(let y=0;y<h;y++)for(let x=0;x<w;x++){
     let k=0;
     for(let i=0;i<bg.length;i++){const sx=x-bgShifts[i].dx,sy=y-bgShifts[i].dy;if(sx<0||sy<0||sx>=w||sy>=h)continue;vw[k++]=bgPl[i].mn[sy*w+sx];}
-    BW[y*w+x]=k<3?255:median(vw,k);
+    BW[y*w+x]=k<3?255:percentile(vw,k,BG_QUANTILE);
   }
   lap('background');
   // Excess whiteness is measured at two smoothing levels: level 0 sees everything, level 1 first removes structures
@@ -312,6 +329,7 @@ export function analyzeBallFrames(win:PFrame[],bg:PFrame[],opts:BallTrackOptions
     cands.sort((a,b)=>b.u-a.u);
     for(const c of cands.slice(0,28))nodes.push({...c,k:i,id:nodes.length});
   }
+  if(opts.noBallFrames?.length){const no=new Set(opts.noBallFrames);const keep=nodes.filter(c=>!no.has(win[c.k].index));nodes.length=0;keep.forEach((c,i)=>{c.id=i;nodes.push(c);});}
   // static distractors (lights, a resting ball, marks the background median missed): same place, in camera-aligned
   // coordinates, in several frames. A ball in flight never sits still.
   {
@@ -320,9 +338,10 @@ export function analyzeBallFrames(win:PFrame[],bg:PFrame[],opts:BallTrackOptions
     nodes.forEach((c,i)=>{const key=Math.floor(q[i].x/cell)+','+Math.floor(q[i].y/cell);(grid.get(key)||grid.set(key,[]).get(key)!).push(i);});
     const drop=new Set<number>();
     nodes.forEach((c,i)=>{
-      const frames=new Set<number>(),cx=Math.floor(q[i].x/cell),cy=Math.floor(q[i].y/cell);
-      for(let gx=cx-1;gx<=cx+1;gx++)for(let gy=cy-1;gy<=cy+1;gy++)for(const j of grid.get(gx+','+gy)||[])if(nodes[j].k!==c.k&&Math.hypot(q[j].x-q[i].x,q[j].y-q[i].y)<=rad)frames.add(nodes[j].k);
-      if(frames.size>=need)drop.add(i);
+      const frames=new Set<number>(),cx=Math.floor(q[i].x/cell),cy=Math.floor(q[i].y/cell);let rMin=c.r,rMax=c.r;
+      for(let gx=cx-1;gx<=cx+1;gx++)for(let gy=cy-1;gy<=cy+1;gy++)for(const j of grid.get(gx+','+gy)||[])if(nodes[j].k!==c.k&&Math.hypot(q[j].x-q[i].x,q[j].y-q[i].y)<=rad){frames.add(nodes[j].k);rMin=Math.min(rMin,nodes[j].r);rMax=Math.max(rMax,nodes[j].r);}
+      // Static = same place AND same size. A ball approaching (growing) or receding (shrinking) hardly moves in the image far away but its size changes.
+      if(frames.size>=need&&rMax<=rMin*1.25)drop.add(i);
     });
     staticDropped=drop.size;
     const keep=nodes.filter((_,i)=>!drop.has(i));nodes.length=0;keep.forEach((c,i)=>{c.id=i;nodes.push(c);});
@@ -336,7 +355,7 @@ export function analyzeBallFrames(win:PFrame[],bg:PFrame[],opts:BallTrackOptions
     else nodes.push({frame:k,x,y,r:4*scale,area:50,peak:0,mean:0,white:1,u:3,forced:true,user:true,k,id:nodes.length});
   }
   lap('static');
-  const params:LinkParams={maxStep:.12*maxDim*speed,minStep:1.2*scale*speed,accTol:Math.max(2.2*scale,5*scale*speed*speed+2*scale),gapMax:9,theta:1.9,view:opts.view,scale};
+  const params:LinkParams={maxStep:.12*maxDim*speed,minStep:(opts.view==='catcher'?.3:1.2)*scale*speed,accTol:Math.max(2.2*scale,5*scale*speed*speed+2*scale),gapMax:9,theta:1.9,view:opts.view,scale};
   // A pitched ball moves fast (median image speed well above what a rolling ball or a drifting light shows).
   // Chains without one are rejected and the search continues on the remaining candidates.
   const vMin=3.5*scale*speed;
@@ -348,7 +367,13 @@ export function analyzeBallFrames(win:PFrame[],bg:PFrame[],opts:BallTrackOptions
     const avg=(l:Node[])=>l.reduce((t,c)=>t+c.r,0)/l.length,head=avg(ch.slice(0,2)),tail=avg(ch.slice(-2));
     return opts.view==='pitcher_rear'?tail<=head*1.2:tail>=head*.85;
   };
-  const plausible=(ch:Node[])=>fast(ch)&&sizeOk(ch);
+  // A ball far from a head-on camera barely moves in the image yet changes size strongly; accept that as well as speed.
+  const strongTrend=(ch:Node[])=>{
+    if(ch.length<6)return false;
+    const avg=(l:Node[])=>l.reduce((t,c)=>t+c.r,0)/l.length,head=avg(ch.slice(0,2)),tail=avg(ch.slice(-2));
+    return opts.view==='pitcher_rear'?tail<=head*.6:tail>=head*1.8;
+  };
+  const plausible=(ch:Node[])=>(fast(ch)||strongTrend(ch))&&sizeOk(ch);
   let pool=nodes,chain:Node[]=[],score=-Infinity,rejected=0;
   for(let attempt=0;attempt<4;attempt++){
     const reindexed=pool.map((c,i)=>({...c,id:i}));const r=linkChain(reindexed,win.length,params);
@@ -365,8 +390,11 @@ export function analyzeBallFrames(win:PFrame[],bg:PFrame[],opts:BallTrackOptions
   // background and whose surrounding ring is not. Works for blurred, streaked or half-hidden balls where the
   // thresholded blob is only a fragment. Background here is the actual aligned median (no dilation).
   const bgRef=openPlane(BW,w,h,0);
-  const refine=(k:number,c:{x:number;y:number;r:number})=>{
+  // `v` is the ball's image velocity (px/frame): during the exposure the ball sweeps about half a frame of travel, so
+  // the template is a capsule (segment + radius) along v rather than a disc.
+  const refine=(k:number,c:{x:number;y:number;r:number},v?:{x:number;y:number})=>{
     const P=winPl[k],sh=shifts[k],r=clamp(c.r,2.5*scale,11*scale),R2=Math.ceil(r*1.7),srch=Math.ceil(Math.max(5*scale,r*1.1));
+    const sp=v?Math.hypot(v.x,v.y):0,hl=Math.min(.25*sp,3*r),ux=sp>0?v!.x/sp:1,uy=sp>0?v!.y/sp:0;
     const V=(x:number,y:number)=>{
       if(x<0||y<0||x>=w||y>=h)return 0;const bx=x+sh.dx,by=y+sh.dy;if(bx<0||by<0||bx>=w||by>=h)return 0;
       const v=P.mn[y*w+x]-bgRef[by*w+bx];return v<-10?-10:v>80?80:v;
@@ -374,9 +402,11 @@ export function analyzeBallFrames(win:PFrame[],bg:PFrame[],opts:BallTrackOptions
     const cx0=Math.round(c.x),cy0=Math.round(c.y);let best=-Infinity,bx0=cx0,by0=cy0;const sc=new Map<number,number>();
     for(let dy=-srch;dy<=srch;dy++)for(let dx=-srch;dx<=srch;dx++){
       let inS=0,inN=0,ringS=0,ringN=0;
-      for(let y=-R2;y<=R2;y++)for(let x=-R2;x<=R2;x++){
-        const d2=x*x+y*y;if(d2>R2*R2)continue;const v=V(cx0+dx+x,cy0+dy+y);
-        if(d2<=r*r){inS+=v;inN++;}else if(d2<=(1.7*r)*(1.7*r)){ringS+=v;ringN++;}
+      for(let y=-R2-hl;y<=R2+hl;y++)for(let x=-R2-hl;x<=R2+hl;x++){
+        // squared distance to the streak segment [-hl·u, +hl·u] (a point when there is no motion)
+        let d2:number;if(hl>0.5){const t=Math.max(-hl,Math.min(hl,x*ux+y*uy)),ex=x-t*ux,ey=y-t*uy;d2=ex*ex+ey*ey;}else d2=x*x+y*y;
+        if(d2>R2*R2)continue;const val=V(cx0+dx+x,cy0+dy+y);
+        if(d2<=r*r){inS+=val;inN++;}else if(d2<=(1.7*r)*(1.7*r)){ringS+=val;ringN++;}
       }
       const score=inS/Math.max(1,inN)-.6*(ringS/Math.max(1,ringN));
       sc.set((dy+srch)*(2*srch+1)+dx+srch,score);
@@ -389,7 +419,9 @@ export function analyzeBallFrames(win:PFrame[],bg:PFrame[],opts:BallTrackOptions
     const ox=par(at(bx0-1,by0),best,at(bx0+1,by0)),oy=par(at(bx0,by0-1),best,at(bx0,by0+1));
     return {x:bx0+ox,y:by0+oy,score:best};
   };
-  for(const c of chain){if(c.user)continue;const g=refine(c.k,c);if(g){c.x=g.x;c.y=g.y;}}
+  const vel=chain.map((c,i)=>{const a=chain[Math.max(0,i-1)],b=chain[Math.min(chain.length-1,i+1)],dk=Math.max(1,b.k-a.k);return {x:(b.x-a.x)/dk,y:(b.y-a.y)/dk};});
+  const refined=chain.map((c,i)=>c.user?null:refine(c.k,c,vel[i]));
+  chain.forEach((c,i)=>{const g=refined[i];if(g){c.x=g.x;c.y=g.y;}});
   if(opts.releaseFrame!==undefined)while(chain.length>4&&!chain[0].user&&win[chain[0].k].index<opts.releaseFrame-1)chain.shift();
   // 5. assemble points: observations and estimates for gaps
   const byK=new Map<number,Node>();chain.forEach(c=>byK.set(c.k,c));
@@ -423,14 +455,23 @@ export function pickBackgroundFrames(total:number,first:number,last:number,max=8
   const nb=Math.min(before.length,after.length?Math.ceil(max/2):max),na=Math.min(after.length,max-nb);
   return [...spread(before,Math.min(before.length,max-na)),...spread(after,na)].sort((a,b)=>a-b);
 }
-export interface BallTrackRun extends BallTrackResult{window:{first:number;last:number};backgroundIndices:number[];captureMs:number;source:{width:number;height:number;workWidth:number;workHeight:number};}
+export interface BallTrackRun extends BallTrackResult{window:{first:number;last:number};backgroundIndices:number[];captureMs:number;captureBreakdown:{seekDecodeMs:number;scaleCopyMs:number;frames:number};source:{width:number;height:number;workWidth:number;workHeight:number};}
 /** Release/glove are source frame indices (the user's marks). Window = release − 2 … glove + 5. */
-export async function trackPitchBall(source:{info:{sourceWidth:number;sourceHeight:number;width:number;height:number};count:number;capture:(i:number)=>Promise<PFrame|null>},
-  releaseFrame:number,gloveFrame:number,opts:BallTrackOptions,isCancelled?:()=>boolean):Promise<BallTrackRun>{
+export async function trackPitchBall(source:{info:{sourceWidth:number;sourceHeight:number;width:number;height:number};count:number;timing?:{seekDecodeMs:number;scaleCopyMs:number;frames:number};capture:(i:number)=>Promise<PFrame|null>;captureRange?:(first:number,last:number,onFrame?:(done:number,total:number)=>void)=>Promise<PFrame[]>},
+  releaseFrame:number,gloveFrame:number,opts:BallTrackOptions,isCancelled?:()=>boolean,onProgress?:(percent:number,text:string)=>void):Promise<BallTrackRun>{
+  const timing0={...(source.timing??{seekDecodeMs:0,scaleCopyMs:0,frames:0})};
   const t0=performance.now(),first=Math.max(0,releaseFrame-2),last=Math.min(source.count-1,gloveFrame+5);
   const bgIdx=pickBackgroundFrames(source.count,first,last);
-  const grab=async(list:number[])=>{const out:PFrame[]=[];for(const i of list){if(isCancelled?.())throw new DOMException('已取消','AbortError');const f=await source.capture(i);if(f)out.push(f);}return out;};
-  const win=await grab(Array.from({length:last-first+1},(_,i)=>first+i)),bg=await grab(bgIdx);
+  const total=last-first+1+bgIdx.length;let done=0;
+  const report=(text:string)=>onProgress?.(Math.min(60,Math.round(done/total*60)),text);
+  const grab=async(list:number[])=>{const out:PFrame[]=[];for(const i of list){if(isCancelled?.())throw new DOMException('已取消','AbortError');const f=await source.capture(i);if(f)out.push(f);done++;report('讀取背景影格');}return out;};
+  report('讀取飛行區間影格');
+  const win=source.captureRange?await source.captureRange(first,last,d=>{done=d;report('讀取飛行區間影格');}):await grab(Array.from({length:last-first+1},(_,i)=>first+i));
+  done=last-first+1;const bg=await grab(bgIdx);
+  if(isCancelled?.())throw new DOMException('已取消','AbortError');
+  onProgress?.(65,'比對背景、尋找球');
   const captureMs=performance.now()-t0,res=analyzeBallFrames(win,bg,opts);
-  return {...res,window:{first,last},backgroundIndices:bgIdx,captureMs,source:{width:source.info.sourceWidth,height:source.info.sourceHeight,workWidth:source.info.width,workHeight:source.info.height}};
+  onProgress?.(100,'完成');
+  const t1=source.timing??timing0;
+  return {...res,captureBreakdown:{seekDecodeMs:t1.seekDecodeMs-timing0.seekDecodeMs,scaleCopyMs:t1.scaleCopyMs-timing0.scaleCopyMs,frames:t1.frames-timing0.frames},window:{first,last},backgroundIndices:bgIdx,captureMs,source:{width:source.info.sourceWidth,height:source.info.sourceHeight,workWidth:source.info.width,workHeight:source.info.height}};
 }
