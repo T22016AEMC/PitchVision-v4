@@ -31,11 +31,16 @@ import {GeometryCards} from './components/GeometryCards';
 import {distancePrior} from './services/distancePrior';
 import {readCameraMetadata,CameraMetadata} from './services/cameraMetadata';
 import type {PitchEstimates} from './services/pitchEstimates';
+import type {FinalNumbers} from './services/finalNumbers';
+import {FinalNumbersPanel,FinalDebug} from './components/FinalNumbersPanel';
 import {UploadCloud,Loader2,AlertTriangle,CheckCircle,Info,ChevronRight,RotateCcw,FlaskConical,Download} from 'lucide-react';
 
 type Step=NavStep|'assist';
 type AnalysisOutcomeDone=Extract<Awaited<ReturnType<AnalysisRuntime['runPitchAnalysis']>>,{status:'done'}>;
 const APP_VERSION=typeof __APP_VERSION__==='string'?__APP_VERSION__:'dev';
+/** package.json needs semver (5.0.3-1); the page shows the release name (5.0.3.1). */
+const DISPLAY_VERSION=APP_VERSION.replace(/-(\d+)$/,'.$1');
+const debugFromUrl=()=>{try{return new URLSearchParams(window.location.search).get('debug')==='1';}catch{return false;}};
 
 export default function App() {
   const [step,setStep]=useState<Step>('video');
@@ -123,6 +128,12 @@ export default function App() {
   const pendingOutcome=useRef<AnalysisOutcomeDone|null>(null);
   const [ballTrack,setBallTrack]=useState<BallTrackSummary|null>(null);
   const [estimates,setEstimates]=useState<PitchEstimates|null>(null);
+  const [final,setFinal]=useState<FinalNumbers|null>(null);
+  // Debug mode (off by default): ?debug=1 in the address, or a long press on the version number.
+  const [debug,setDebug]=useState<boolean>(debugFromUrl);
+  const pressTimer=useRef<number|null>(null);
+  const pressStart=()=>{if(pressTimer.current!==null)window.clearTimeout(pressTimer.current);pressTimer.current=window.setTimeout(()=>{pressTimer.current=null;setDebug(d=>!d);},650);};
+  const pressEnd=()=>{if(pressTimer.current!==null){window.clearTimeout(pressTimer.current);pressTimer.current=null;}};
   const [outcomeDistance,setOutcomeDistance]=useState<number|null>(null);
   const [cameraMeta,setCameraMeta]=useState<CameraMetadata|null>(null);
   // Ball-point labels (confirm / correct / "no ball"): kept in this browser per video, exportable as JSON.
@@ -169,7 +180,7 @@ export default function App() {
     setVideoFps(NaN);setTotalVideoFrames(0);setVideoFileName('');setCurrentVideoFrame(0);setTargetFrameSeek(null);setVisibleEndFrame(0);
     setEvents({release:null,glove:null});setAnalyzedEvents(null);setCompletedResult(null);setCompletedVelocity(null);setDetections([]);setCurrentViewKind('original');setUserVideoUrl(null);setVideoTiming(null);setCameraGeometry(null);
     setHasAnalyzed(false);setAiDetection(null);setAutoDetectResult(null);setVideoTrack([]);setVideoMetrics(null);setConfidenceScores(null);
-    setAssistPoints([]);setAssistNoBall([]);setBallTrack(null);setEstimates(null);setOutcomeDistance(null);setCameraMeta(null);setConfirmMode(false);pendingOutcome.current=null;setFpsDialogOpen(false);setFpsError(null);
+    setAssistPoints([]);setAssistNoBall([]);setBallTrack(null);setEstimates(null);setFinal(null);setOutcomeDistance(null);setCameraMeta(null);setConfirmMode(false);pendingOutcome.current=null;setFpsDialogOpen(false);setFpsError(null);
   };
 
   // 統一 Video Loading Controller：同一支檔案重選也能觸發
@@ -266,7 +277,7 @@ export default function App() {
 
   const commitOutcome=(outcome:AnalysisOutcomeDone,ranEvents:SelectedEvents)=>{
     setCompletedResult(outcome.result);setCompletedVelocity({velocityKmh:outcome.velocityKmh,flightSeconds:outcome.flightSeconds,flightFrames:outcome.flightFrames});
-    setDetections(outcome.detections);setAnalyzedEvents(ranEvents);setBallTrack(outcome.ballTrack);setEstimates(outcome.estimates);setOutcomeDistance(outcome.distanceM);
+    setDetections(outcome.detections);setAnalyzedEvents(ranEvents);setBallTrack(outcome.ballTrack);setEstimates(outcome.estimates);setFinal(outcome.final);setOutcomeDistance(outcome.distanceM);
     setAnalysisProgress(100);setHasAnalyzed(true);setAssistPoints([]);setAssistNoBall([]);pendingOutcome.current=null;
     setStep('result');
   };
@@ -537,7 +548,7 @@ export default function App() {
             <p>出手 <b className="font-mono">{events.release?.timeSec.toFixed(4)}s</b> → 進手套 <b className="font-mono">{events.glove?.timeSec.toFixed(4)}s</b></p>
             <p>飛行時間 <b className="font-mono text-cyan-200">{flightSecondsPreview!==null&&flightSecondsPreview>0?flightSecondsPreview.toFixed(4):'—'} 秒</b>{originalFlightFrames!==null&&<span className="text-slate-400">（區間內原始影格 {originalFlightFrames} 張）</span>}</p>
             <p>視角 <b>{cameraViewMode==='catcher'?'捕手方向':'投手方向'}</b> · 球種 <b>{selectedPitchType}</b></p>
-            <p>使用距離 <b className="font-mono">{analysisDistance} m</b><span className="text-slate-400 text-xs">（{cameraGeometry?.method==='planar_reference'?'地面矩形標定':distanceOverrideM!==null?'你輸入的距離':'先驗：板距 − 出手延伸，沒有捕手；分析後會附範圍'}）</span></p>
+            <p>使用距離 <b className="font-mono">{analysisDistance} m</b>{cameraGeometry?.method!=='planar_reference'&&distanceOverrideM===null&&<span id="distance-estimated" className="ml-1 text-xs text-amber-300">推估 ±0.7 m</span>}<span className="text-slate-400 text-xs">（{cameraGeometry?.method==='planar_reference'?'地面矩形標定':distanceOverrideM!==null?'你輸入的距離':'先驗：板距 − 出手延伸，沒有捕手；分析後會附範圍'}）</span></p>
           </div>
           <PitcherSetupCard biometrics={biometrics} onChange={setBiometrics} recomputeBiometrics={computePitcherBiometrics} distanceOverrideM={distanceOverrideM} onDistanceOverride={v=>{setDistanceOverrideM(v);setHasAnalyzed(false);}}/>
           <div className="card space-y-1">
@@ -556,41 +567,42 @@ export default function App() {
 
         {/* ── Step 4：結果 ───────────────────────────── */}
         {step==='result'&&matchedResult&&<section id="result-screen" aria-labelledby="h-result" className="space-y-4">
-          <h2 id="h-result" className="screen-title">4. 分析結果</h2>
-          {foundText&&<div id="ball-track-summary" role="status" className={`card text-sm ${ballTrack?.status==='tracked'?'border-cyan-500/40 text-cyan-100':'border-amber-500/40 text-amber-100'}`} data-status={ballTrack?.status} data-observed={ballTrack?.observedCount??0}>
-            <p className="font-bold">{foundText}</p>
-            {ballTrack&&ballTrack.engine==='new'&&<p className="text-[11px] text-slate-400 mt-1">{ballTrack.status==='tracked'?'推估點只由前後內插，不是影像證據，也不會用來算結果。':''}{ballTrack.tripodAdvised?' 畫面有明顯晃動，建議用腳架。':''} 處理 {(ballTrack.ms/1000).toFixed(1)} 秒{ballTrack.work?`，工作解析度 ${ballTrack.work}`:''}。</p>}
-            {ballTrack&&ballTrack.engine==='old'&&<p className="text-[11px] text-slate-400 mt-1">{ballTrack.message}</p>}
-          </div>}
-          <div id="confirm-panel" className="card space-y-2">
-            <h3 className="card-title">確認球點（選用）</h3>
-            <p className="text-xs text-slate-400">在影片上逐格確認程式找到的球點：按「正確」、拖曳修正位置，或標「這格沒有球」。標記只存在這台裝置的瀏覽器，不會上傳；已確認的點會在重新分析時當作錨點。</p>
-            <button type="button" id="btn-confirm-mode" aria-pressed={confirmMode} onClick={()=>{setConfirmMode(m=>!m);setViewTab('video');}} className={`btn-secondary ${confirmMode?'!border-cyan-400 !text-cyan-200':''}`}>{confirmMode?'結束確認':'開始確認球點'}</button>
-            {confirmMode&&currentViewKind==='interpolated'&&<p role="status" className="text-xs text-amber-200">目前是補幀的推算畫面，不能標記球點；請到影片的「更多功能」切回原始影格。</p>}
-            <p id="label-summary" className="text-xs text-slate-300">已標 {labels.length} 格（確認 {labelStats.confirmed}／修正 {labelStats.corrected}／沒有球 {labelStats.noBall}）</p>
-            <div className="grid grid-cols-2 gap-2">
-              <button type="button" id="btn-export-labels" disabled={!labels.length} onClick={exportLabels} className="btn-secondary"><Download size={16}/>匯出標記資料</button>
-              <button type="button" id="btn-reanalyze-labels" disabled={!labels.length||busy} onClick={reanalyzeWithLabels} className="btn-secondary">用標記重新分析</button>
+          <h2 id="h-result" className="sr-only">4. 分析結果</h2>
+          {final?<FinalNumbersPanel final={final}/>:<p id="final-missing" className="card text-sm text-amber-200">這次分析沒有產生最終數據，請重新分析。</p>}
+          {foundText&&<p id="ball-track-summary" role="status" className={`text-xs ${ballTrack?.status==='tracked'?'text-slate-400':'text-amber-200'}`} data-status={ballTrack?.status} data-observed={ballTrack?.observedCount??0}>{foundText}</p>}
+          <details id="confirm-details" className="card">
+            <summary className="card-title">確認球點（選用）</summary>
+            <div id="confirm-panel" className="mt-3 space-y-2">
+              <p className="text-xs text-slate-400">在影片上逐格確認程式找到的球點：按「正確」、拖曳修正位置，或標「這格沒有球」。標記只存在這台裝置的瀏覽器，不會上傳；已確認的點會在重新分析時當作錨點。</p>
+              <button type="button" id="btn-confirm-mode" aria-pressed={confirmMode} onClick={()=>{setConfirmMode(m=>!m);setViewTab('video');}} className={`btn-secondary ${confirmMode?'!border-cyan-400 !text-cyan-200':''}`}>{confirmMode?'結束確認':'開始確認球點'}</button>
+              {confirmMode&&currentViewKind==='interpolated'&&<p role="status" className="text-xs text-amber-200">目前是補幀的推算畫面，不能標記球點；請到影片的「更多功能」切回原始影格。</p>}
+              <p id="label-summary" className="text-xs text-slate-300">已標 {labels.length} 格（確認 {labelStats.confirmed}／修正 {labelStats.corrected}／沒有球 {labelStats.noBall}）</p>
+              <div className="grid grid-cols-2 gap-2">
+                <button type="button" id="btn-export-labels" disabled={!labels.length} onClick={exportLabels} className="btn-secondary"><Download size={16}/>匯出標記資料</button>
+                <button type="button" id="btn-reanalyze-labels" disabled={!labels.length||busy} onClick={reanalyzeWithLabels} className="btn-secondary">用標記重新分析</button>
+              </div>
+              <button type="button" id="btn-clear-labels" disabled={!labels.length} onClick={()=>updateLabels(()=>[])} className="link-btn !text-slate-400">清除這支影片的全部標記</button>
             </div>
-            <button type="button" id="btn-clear-labels" disabled={!labels.length} onClick={()=>updateLabels(()=>[])} className="link-btn !text-slate-400">清除這支影片的全部標記</button>
-          </div>
-          <section id="full-data" className="space-y-3">
-            <h3 className="card-title">完整數據</h3>
-            {estimates?<GeometryCards estimates={estimates} result={matchedResult}/>:<ResultCards result={matchedResult} averageVelocityKmh={completedVelocity?.velocityKmh??matchedResult.velocity_kmh} flightSeconds={completedVelocity?.flightSeconds??matchedResult.flight_time_sec} distanceM={outcomeDistance??analysisDistance}/>}
-          </section>
-          {analyzedEvents&&<p id="event-time-provenance" data-engine-flight-seconds={matchedResult.flight_time_sec} data-events={JSON.stringify(analyzedEvents)} className="text-xs text-amber-200 card">出手 {analyzedEvents.release?.timeSec.toFixed(6)}s（{analyzedEvents.release?.kind==='interpolated'?'推算':!sourceTimesValid?'媒體時間':analyzedEvents.release?.kind==='cfr_assumed'?'CFR假設':'原始'}）→進手套 {analyzedEvents.glove?.timeSec.toFixed(6)}s（{analyzedEvents.glove?.kind==='interpolated'?'推算':!sourceTimesValid?'媒體時間':analyzedEvents.glove?.kind==='cfr_assumed'?'CFR假設':'原始'}）。事件精度仍受原始間距 {(sourceTimesValid?Math.max(analyzedEvents.release?.sourceSpanSec||0,analyzedEvents.glove?.sourceSpanSec||0).toFixed(4):'未知')}s 與遮蔽限制；補幀不增加真觀測或旋轉量測精度。</p>}
-          <details id="db-match-data" className="card">
-            <summary className="card-title">資料庫匹配數據（預設收合）</summary>
-            <div className="mt-3 space-y-3">
-              <p className="text-xs text-slate-400">以下是舊版引擎比對資料庫候選的結果：轉速、轉軸、轉動效率與候選位移都是資料庫先驗，單鏡頭不能唯一決定。</p>
+          </details>
+          {debug&&<section id="debug-panel" aria-label="除錯資料" className="space-y-3 border-t border-dashed border-slate-700 pt-3">
+            <p className="text-xs font-bold text-amber-300">除錯模式（後台運算與校正數據）</p>
+            {ballTrack&&ballTrack.engine==='new'&&<p className="text-[11px] text-slate-400">{ballTrack.status==='tracked'?'推估點只由前後內插，不是影像證據，也不會用來算結果。':''}{ballTrack.tripodAdvised?' 畫面有明顯晃動，建議用腳架。':''} 處理 {(ballTrack.ms/1000).toFixed(1)} 秒{ballTrack.work?`，工作解析度 ${ballTrack.work}`:''}。</p>}
+            {final&&<FinalDebug final={final}/>}
+            <section id="full-data" className="space-y-3">
+              <h3 className="card-title">幾何擬合（相機、距離、事件、平均球速）</h3>
+              {estimates?<GeometryCards estimates={estimates} result={matchedResult} showTypes={selectedPitchType===PITCH_TYPE_OPTIONS[0]}/>:<p className="text-xs text-slate-400">沒有幾何擬合資料。</p>}
+            </section>
+            {analyzedEvents&&<p id="event-time-provenance" data-engine-flight-seconds={matchedResult.flight_time_sec} data-events={JSON.stringify(analyzedEvents)} className="text-xs text-amber-200 card">出手 {analyzedEvents.release?.timeSec.toFixed(6)}s（{analyzedEvents.release?.kind==='interpolated'?'推算':!sourceTimesValid?'媒體時間':analyzedEvents.release?.kind==='cfr_assumed'?'CFR假設':'原始'}）→進手套 {analyzedEvents.glove?.timeSec.toFixed(6)}s（{analyzedEvents.glove?.kind==='interpolated'?'推算':!sourceTimesValid?'媒體時間':analyzedEvents.glove?.kind==='cfr_assumed'?'CFR假設':'原始'}）。事件精度仍受原始間距 {(sourceTimesValid?Math.max(analyzedEvents.release?.sourceSpanSec||0,analyzedEvents.glove?.sourceSpanSec||0).toFixed(4):'未知')}s 與遮蔽限制；補幀不增加真觀測或旋轉量測精度。</p>}
+            <section id="db-match-data" className="space-y-3">
+              <h3 className="card-title">舊引擎資料庫匹配（候選在資料庫自身條件下的值）</h3>
               <ResultCards result={matchedResult} averageVelocityKmh={completedVelocity?.velocityKmh??matchedResult.velocity_kmh} flightSeconds={completedVelocity?.flightSeconds??matchedResult.flight_time_sec} distanceM={outcomeDistance??analysisDistance}/>
               <details id="full-metrics" className="card"><summary className="card-title">反查依據</summary>
                 <div className="mt-3"><MetricsPanel compact result={matchedResult} matchedResult={matchedResult} calcVelocity={completedVelocity?.velocityKmh} flightSeconds={completedVelocity?.flightSeconds} flightFrames={completedVelocity?.flightFrames} standardDistance={STANDARD_GLOVE_DISTANCE_METERS}/></div>
               </details>
-            </div>
-          </details>
-          <p className="text-xs text-slate-400 flex gap-2"><Info className="w-4 h-4 shrink-0"/>平均球速＝距離 ÷ 出手到進手套時間；位移與旋轉為資料庫候選的物理模型值，單鏡頭無法唯一決定轉速與轉動效率。</p>
+            </section>
+          </section>}
         </section>}
+        {!fullscreen&&<p id="app-version" className="text-center text-[11px] text-slate-600 select-none py-2" onPointerDown={pressStart} onPointerUp={pressEnd} onPointerLeave={pressEnd} onPointerCancel={pressEnd} onContextMenu={e=>e.preventDefault()} data-debug={debug?'1':'0'}>PitchVision 手機版 {DISPLAY_VERSION}{debug?' · 除錯模式':''}</p>}
       </main>
 
       {/* ── 底部單手操作列（標記與補點畫面是全螢幕，不顯示）─── */}
@@ -609,7 +621,7 @@ export default function App() {
       </nav>}
 
       <ScientificInfoPanel open={scienceOpen} onClose={()=>setScienceOpen(false)} result={matchedResult} quality={videoQuality} fileName={videoFileName} fps={videoFps} onDatabase={openDatabase} onCode={openCode} timingNote={videoTiming?.timingWarning}
-        timing={videoTiming} timingConfirmed={sourceTimesValid} onChangeFps={()=>{setScienceOpen(false);setFpsDialogOpen(true);}} version={APP_VERSION}
+        timing={videoTiming} timingConfirmed={sourceTimesValid} onChangeFps={()=>{setScienceOpen(false);setFpsDialogOpen(true);}} version={DISPLAY_VERSION}
         advanced={<GroundCalibration video={videoElementRef.current} hasVideo={Boolean(userVideoUrl)} disabled={busy} geometry={cameraGeometry} onApply={g=>{setCameraGeometry(g);setHasAnalyzed(false);}} onClear={()=>{setCameraGeometry(null);setHasAnalyzed(false);}}/>}/>
       {(needFps||fpsDialogOpen)&&<FpsDialog error={fpsError} onPick={pickFps} onCancel={needFps?cancelFps:()=>{setFpsDialogOpen(false);setFpsError(null);}}/>}
       {isDbModalOpen&&!database&&<div className="fixed inset-0 z-50 bg-slate-950/80 flex items-center justify-center p-4" role="status"><p className="card text-sm flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin"/>載入參考資料庫...</p></div>}

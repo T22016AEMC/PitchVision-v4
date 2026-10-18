@@ -17,6 +17,8 @@ import {standardCameras} from './services/standardCamera';
 import {runGeometryStage} from './services/geometryStage';
 import type {PitchEstimates} from './services/pitchEstimates';
 import type {CameraMetadata} from './services/cameraMetadata';
+import {computeFinalNumbers,FinalNumbers} from './services/finalNumbers';
+import {releaseHeightPriorM} from './services/pitchGeometryFit';
 import {validateAndReconstructVideoTrack} from './services/trajectoryValidationService';
 import {calculateUnifiedConfidence} from './confidenceEngine';
 
@@ -85,7 +87,9 @@ export type AnalysisOutcome=
      /** Raw per-frame ball detections inside the marked window; display only, never fed back into the engine. */
      detections:BaseballTrackPoint[];trackingRan:boolean;ballTrack:BallTrackSummary|null;
      /** 5.0.3 geometry stage: camera, distance, events, movement, speeds and pitch types, each with range and origin. */
-     estimates:PitchEstimates|null;distanceM:number;eventTimes:{releaseSec:number;gloveSec:number}}
+     estimates:PitchEstimates|null;distanceM:number;eventTimes:{releaseSec:number;gloveSec:number};
+     /** 5.0.3.1: the six numbers of the result page (one value and one range each); null when the geometry stage is switched off. */
+     final:FinalNumbers|null}
   | {status:'stale';message?:string};
 
 const pause=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
@@ -236,7 +240,16 @@ export async function finishAnalysis(input:AnalysisInput,hooks:AnalysisHooks,sta
   computed.original_flight_frames=originalFlightFrames;
   computed.tracking_evidence=sparseResult?.evidence??{sourceFrames:0,attemptedFrames:0,verifiedFrames:0,unverifiedFrames:0,observationCount:0,excludedFrames:0,trackFound:false,trackReliable:false,reason:trackingMessage};
   computed.confidence_scores.quality_notes.push(trackingMessage);
+  // 5.0.3.1: one value and one range per final number (measurement × database prior), see services/finalNumbers.ts
+  let final:FinalNumbers|null=null;
+  if(!input.disableGeometryStage&&events.release&&events.glove){
+    const override=typeof input.distanceOverrideM==='number'&&input.distanceOverrideM>5&&input.distanceOverrideM<30;
+    try{final=computeFinalNumbers({db:PITCH_DATABASE,selectedPitchType,aiOption:PITCH_TYPE_OPTIONS[0],fit:geo?.fitUsed&&geo.fit?geo.fit:null,
+      fallback:{distanceM:engineBiometrics.effectiveTravelDistanceM,sigmaM:override?.03:.7,markFlightSec:events.glove.timeSec-events.release.timeSec,frameSec:videoFps>0?1/videoFps:1/30,
+        releaseHeightM:releaseHeightPriorM(biometrics.pitcherHeightCm,biometrics.hasMound)}});}
+    catch(error){console.warn('Final numbers unavailable:',error);final=null;}
+  }
   const detections=(sparseResult?.observations||[]).filter(p=>p.timestamp>=events.release!.timeSec&&p.timestamp<=events.glove!.timeSec) as unknown as BaseballTrackPoint[];
   return {status:'done',result:computed,velocityKmh:engineVelocity.velocityKmh,flightSeconds:engineVelocity.flightSeconds,flightFrames:engineVelocity.flightFrames,detections,trackingRan:Boolean(sparseResult),ballTrack,
-    estimates:geo?.estimates??null,distanceM:engineBiometrics.effectiveTravelDistanceM,eventTimes:{releaseSec:engineEvents.release!.timeSec,gloveSec:engineEvents.glove!.timeSec}};
+    estimates:geo?.estimates??null,distanceM:engineBiometrics.effectiveTravelDistanceM,eventTimes:{releaseSec:engineEvents.release!.timeSec,gloveSec:engineEvents.glove!.timeSec},final};
 }

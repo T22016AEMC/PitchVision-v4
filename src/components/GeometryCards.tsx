@@ -18,7 +18,7 @@ function Card({item,id}:{item:EstimateItem;id:string}){
 
 const KEYS:EstimateItem['key'][]=['speedAvg','speedRelease','distance','release','glove','ivb','hb','angle','height','camera'];
 
-export function GeometryCards({estimates,result,ranges}:{estimates:PitchEstimates;result:MatchResult;ranges?:boolean}){
+export function GeometryCards({estimates,result,ranges,showTypes=true}:{estimates:PitchEstimates;result:MatchResult;ranges?:boolean;showTypes?:boolean}){
   void ranges;
   const fallback=estimates.status==='fallback';
   const legacyTypes=Array.from(new Set((result.top_candidates??[]).map(c=>c.pitch_type))).slice(0,3);
@@ -30,19 +30,19 @@ export function GeometryCards({estimates,result,ranges}:{estimates:PitchEstimate
     </div>}
     {estimates.status==='low_confidence'&&<p id="geometry-lowconf" className="card border-amber-500/40 text-amber-100 text-xs">校正信心偏低：{estimates.reasons.join('；')}</p>}
     {estimates.notes.length>0&&<p id="geometry-notes" className="card text-xs text-slate-300">{estimates.notes.join('；')}</p>}
-    <div id="pitch-type-top3" className="card space-y-2">
+    {showTypes&&<div id="geometry-pitch-types" className="card space-y-2">
       <h3 className="card-title">球種（前三名與相對可能性）</h3>
       {estimates.pitchTypes?<>
         <ol className="space-y-1.5">{estimates.pitchTypes.top3.map((t,i)=><li key={t.pitchType} className="flex items-center gap-2 text-sm" data-rank={i+1}>
           <span className="w-5 text-slate-400 font-mono">{i+1}</span><span className="flex-1 font-semibold">{t.pitchType}</span>
           <span className="font-mono text-cyan-200">{Math.round(t.probability*100)}%</span></li>)}</ol>
-        {estimates.pitchTypes.hard&&<p id="pitch-type-hard" className="text-xs text-amber-200">難以區分：{estimates.pitchTypes.hardReason}。影片裡球速與位移的差異不足以判定，請當作候選。</p>}
+        {estimates.pitchTypes.hard&&<p className="text-xs text-amber-200">難以區分：{estimates.pitchTypes.hardReason}。影片裡球速與位移的差異不足以判定，請當作候選。</p>}
         <p className="text-[11px] text-slate-400">依球速範圍與位移範圍，對照資料庫候選（資料庫先驗）；可能性是相對值，不是量測。</p>
       </>:<>
         <ol className="space-y-1">{legacyTypes.map((t,i)=><li key={t} className="text-sm"><span className="text-slate-400 font-mono mr-2">{i+1}</span>{t}</li>)}</ol>
         <p className="text-xs text-amber-200">沒有足夠的影像證據計算相對可能性，只列出資料庫最相似的候選。</p></>}
-    </div>
+    </div>}
     <div className="grid grid-cols-2 gap-2">{items.map(i=><Card key={i.key} id={`geo-${i.key}`} item={i}/>)}</div>
-    <p className="text-[11px] text-slate-400">單鏡頭影片量不到距離與尺度：距離、出手高度與相機位置以先驗為主；範圍是依這支影片與先驗算出的 90% 區間，不是儀器讀數。轉速、轉軸與轉動效率仍不能由單鏡頭唯一決定（下方資料庫區塊）。</p>
+    <p className="text-[11px] text-slate-400">單鏡頭影片量不到距離與尺度：距離、出手高度與相機位置以先驗為主；範圍是依這支影片與先驗算出的 90% 區間，不是儀器讀數。轉速、轉軸與轉動效率仍不能由單鏡頭唯一決定。</p>
   </div>;
 }
