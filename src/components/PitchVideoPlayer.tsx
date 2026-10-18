@@ -11,16 +11,20 @@ interface PitchVideoPlayerProps {
  isFpsEstimated?:boolean;viewMode:CameraViewMode;velocityKmh?:number;pitchName?:string;hasAnalyzed?:boolean;busy?:boolean;
  onCurrentFrameChange?:(frame:number)=>void;onPositionChange?:(point:TimePosition)=>void;targetFrameSeek?:number|null;onSetEvent:(name:'release'|'glove',event:SelectedEvent)=>void;
  spatialCalibration?:SpatialCalibrationInfo;onVideoElementReady?:(el:HTMLVideoElement|null)=>void;isSelectingPoint?:1|2|null;onSelectCoordinate?:(x:number,y:number)=>void;
- manualPoint1?:{frame:number;x_norm:number;y_norm:number}|null;manualPoint2?:{frame:number;x_norm:number;y_norm:number}|null;
+ /** Points the user tapped / labelled on the CURRENT frame. */
+ markers?:PointMarker[];
  variant?:'fullscreen'|'inline'|'compact';overlay?:{observed:OverlayPoint[];estimated:OverlayPoint[]}|null;
  twoD?:ReactNode;showTwoD?:boolean;viewToggle?:ReactNode;menuExtra?:ReactNode;onBack?:()=>void;onNext?:()=>void;
- assist?:{text:string;onSkip:()=>void}|null;
+ assist?:{text:string;count:number;min:number;max:number;onSkip:()=>void;onNoBall:()=>void;onDone:()=>void}|null;
+ /** Ball-point confirmation: the program's point on this frame, the user's label on it, and the actions. */
+ confirm?:{program:{xNorm:number;yNorm:number;source:'observation'|'estimated'|'user'}|null;label:{xNorm:number;yNorm:number;kind:'confirmed'|'corrected'|'no_ball'}|null;onConfirm:()=>void;onNoBall:()=>void;onMove:(xNorm:number,yNorm:number)=>void;onClear:()=>void}|null;
  /** Called once per video with (browser's presented time of frame 0) − (container time of frame 0), when they differ. */
  onTimeBaseOffset?:(offsetSec:number)=>void;
 }
+export interface PointMarker{xNorm:number;yNorm:number;kind:'tap'|'confirmed'|'corrected'|'no_ball';}
 /** A ball position found by the program on one source frame (display only; never fed back into the engine). */
 export interface OverlayPoint{frame:number;timestamp:number;x_norm:number;y_norm:number;}
-export function PitchVideoPlayer({videoUrl,releaseFrame,gloveFrame,totalFrames,fps:providedFps=NaN,timestamps:providedTimes=[],sourceTiming,events,selectionOnly=false,timestampsArePreviewPositions=false,viewMode,busy=false,onCurrentFrameChange,onPositionChange,targetFrameSeek,onSetEvent,onVideoElementReady,isSelectingPoint=null,onSelectCoordinate,manualPoint1,manualPoint2,variant='inline',overlay=null,twoD,showTwoD=false,viewToggle,menuExtra,onBack,onNext,assist=null,onTimeBaseOffset}:PitchVideoPlayerProps){
+export function PitchVideoPlayer({videoUrl,releaseFrame,gloveFrame,totalFrames,fps:providedFps=NaN,timestamps:providedTimes=[],sourceTiming,events,selectionOnly=false,timestampsArePreviewPositions=false,viewMode,busy=false,onCurrentFrameChange,onPositionChange,targetFrameSeek,onSetEvent,onVideoElementReady,isSelectingPoint=null,onSelectCoordinate,markers=[],variant='inline',overlay=null,twoD,showTwoD=false,viewToggle,menuExtra,onBack,onNext,assist=null,confirm=null,onTimeBaseOffset}:PitchVideoPlayerProps){
  const videoRef=useRef<HTMLVideoElement|null>(null),previewCanvas=useRef<HTMLCanvasElement|null>(null),session=useRef<LocalFrameInterpolation|null>(null),request=useRef(0);
  const [isPlaying,setIsPlaying]=useState(false),[isMetadataReady,setIsMetadataReady]=useState(false),[fine,setFine]=useState(false),[position,setPosition]=useState<TimePosition>({timeSec:0,kind:"original",left:0,right:0,alpha:0});
  const [preview,setPreview]=useState<PreviewFrame|null>(null),[previewState,setPreviewState]=useState<'idle'|'processing'|'ready'|'failed'>('idle'),[previewError,setPreviewError]=useState('');
@@ -38,6 +42,7 @@ export function PitchVideoPlayer({videoUrl,releaseFrame,gloveFrame,totalFrames,f
  const index=points.nearest(position.timeSec),point=position;
  const currentFrame=point.left;
  const showPreview=!isPlaying&&point.kind==='interpolated'&&previewState==='ready'&&Boolean(preview);
+ const previewShrunk=Boolean(preview)&&Boolean(videoRef.current?.videoWidth)&&preview!.width<videoRef.current!.videoWidth;
  const canMark=Boolean(videoUrl&&isMetadataReady&&!busy&&!sourceSeeking&&(point.kind!=='interpolated'||previewState==='ready'));
  const markerPosition=(x:number,y:number)=>{const v=videoRef.current,rect=v?.parentElement?.getBoundingClientRect();if(!v||!rect||!v.videoWidth)return{left:`${x*100}%`,top:`${y*100}%`};const scale=Math.min(rect.width/v.videoWidth,rect.height/v.videoHeight),w=v.videoWidth*scale,h=v.videoHeight*scale;return{left:`${((rect.width-w)/2+x*w)/rect.width*100}%`,top:`${((rect.height-h)/2+y*h)/rect.height*100}%`};};
  const seek=(p:TimePosition)=>{const v=videoRef.current;if(!v||busy||!p||!Number.isFinite(p.timeSec)||!timestamps.length)return;pauseSyncPending.current=false;suppressPauseSync.current=!v.paused;v.pause();setIsPlaying(false);setPosition(p);setSelectionRevision(n=>n+1);onCurrentFrameChange?.(p.left);onPositionChange?.(p);request.current++;session.current?.invalidate();setPreview(null);setPreviewState(p.kind==='interpolated'?'processing':'idle');
@@ -113,6 +118,15 @@ export function PitchVideoPlayer({videoUrl,releaseFrame,gloveFrame,totalFrames,f
  const nowObserved=overlayOn?overlay!.observed.find(near):undefined,nowEstimated=overlayOn?overlay!.estimated.find(near):undefined;
  const trail=overlayOn?overlay!.observed.filter(p=>p.timestamp<point.timeSec-1e-6):[];
  const markerAt=(p:{x_norm:number;y_norm:number})=>markerPosition(p.x_norm,p.y_norm);
+ // Pixel position on screen → normalised video coordinates (accounts for the object-contain letterbox).
+ const clientToNorm=(clientX:number,clientY:number)=>{
+  const v=videoRef.current,rect=v?.parentElement?.getBoundingClientRect();if(!v||!rect||!v.videoWidth)return null;
+  const scale=Math.min(rect.width/v.videoWidth,rect.height/v.videoHeight),w=v.videoWidth*scale,h=v.videoHeight*scale;
+  const x=clientX-rect.left-(rect.width-w)/2,y=clientY-rect.top-(rect.height-h)/2;
+  return {x:Math.max(0,Math.min(1,x/w)),y:Math.max(0,Math.min(1,y/h))};
+ };
+ const [drag,setDrag]=useState<{x:number;y:number}|null>(null);
+ const handlePos=confirm?(drag?{xNorm:drag.x,yNorm:drag.y}:confirm.label&&confirm.label.kind!=='no_ball'?confirm.label:confirm.program??null):null;
  const closeMenu=()=>setMenuOpen(false);
  const scrubRow=<div id="scrub-row" className="flex items-center gap-2 pointer-events-auto">
   <button type="button" id="step-back" aria-label="後退一格（長按連續）" disabled={busy||!points.length} onPointerDown={startHold(-1)} onPointerUp={stopHold} onPointerCancel={stopHold} onLostPointerCapture={stopHold} onContextMenu={e=>e.preventDefault()} onClick={e=>{if(e.detail===0)stepFrame(-1);}} className="ov-step"><ChevronLeft size={20}/>−1</button>
@@ -135,12 +149,17 @@ export function PitchVideoPlayer({videoUrl,releaseFrame,gloveFrame,totalFrames,f
        onSelectCoordinate(Number(Math.max(0,Math.min(1,clickX/contentW)).toFixed(4)),Number(Math.max(0,Math.min(1,clickY/contentH)).toFixed(4)));
        return;
       }
+      if(confirm&&!showTwoD){const n=clientToNorm(e.clientX,e.clientY);if(n)confirm.onMove(Number(n.x.toFixed(4)),Number(n.y.toFixed(4)));return;}
       if(isFull&&!showTwoD){setControlsHidden(h=>!h);setMenuOpen(false);}
      }}>
      <video ref={videoRef} src={videoUrl} className="w-full h-full object-contain select-none" playsInline muted onTimeUpdate={handleTimeUpdate} onLoadedMetadata={handleVideoLoadedMetadata} onSeeked={handleSeeked} onSeeking={()=>setSourceSeeking(true)} onEnded={()=>setIsPlaying(false)} onPause={handlePause} onPlay={()=>{suppressPauseSync.current=false;setIsPlaying(true);}}/>
      <canvas id="interpolated-preview" ref={previewCanvas} aria-label="局部運動插值畫面" className="absolute inset-0 w-full h-full object-contain pointer-events-none" style={{display:showPreview?'block':'none'}} data-time={previewState==='ready'?point.timeSec:''} data-motion-size={JSON.stringify(preview?[preview.motionWidth,preview.motionHeight]:[])} data-estimate-ms={preview?.estimateMs??0} data-synthesis-ms={preview?.synthesisMs??0} data-preview-state={previewState} data-quality={preview?.quality.level??''} data-source-indices={JSON.stringify(preview?.sourceIndices??[])} data-source-media-times={JSON.stringify(preview?.sourceMediaTimes??[])} data-changed-a={preview?.changedA??0} data-changed-b={preview?.changedB??0}/>
-     {manualPoint1&&<div className="absolute pointer-events-none -translate-x-1/2 -translate-y-1/2 z-10" style={markerAt(manualPoint1)}><div className="w-6 h-6 rounded-full border-2 border-white bg-cyan-500/70"/></div>}
-     {manualPoint2&&<div className="absolute pointer-events-none -translate-x-1/2 -translate-y-1/2 z-10" style={markerAt(manualPoint2)}><div className="w-6 h-6 rounded-full border-2 border-white bg-amber-500/70"/></div>}
+     {markers.map((m,i)=><span key={'m'+i} data-marker={m.kind} className={`ov-dot ov-marker ov-marker-${m.kind}`} style={markerAt({x_norm:m.xNorm,y_norm:m.yNorm})}>{m.kind==='no_ball'?'×':''}</span>)}
+     {confirm&&handlePos&&<span id="confirm-handle" data-label-kind={confirm.label?.kind??''} className={`ov-handle ${confirm.label?'ov-handle-'+confirm.label.kind:'ov-handle-candidate'}`} style={markerAt({x_norm:handlePos.xNorm,y_norm:handlePos.yNorm})}
+       onClick={e=>e.stopPropagation()}
+       onPointerDown={e=>{e.stopPropagation();e.preventDefault();try{e.currentTarget.setPointerCapture(e.pointerId);}catch{/* drag still works */}}}
+       onPointerMove={e=>{if(!e.currentTarget.hasPointerCapture(e.pointerId))return;const n=clientToNorm(e.clientX,e.clientY);if(n)setDrag(n);}}
+       onPointerUp={e=>{if(e.currentTarget.hasPointerCapture(e.pointerId))e.currentTarget.releasePointerCapture(e.pointerId);const moved=drag;setDrag(null);if(moved)confirm.onMove(Number(moved.x.toFixed(4)),Number(moved.y.toFixed(4)));}}/>}
      {overlayOn&&<div id="ball-overlay" className="absolute inset-0 pointer-events-none z-10" data-observed-count={overlay!.observed.length} data-estimated-count={overlay!.estimated.length} data-current-observed={nowObserved?'1':'0'} data-current-estimated={nowEstimated?'1':'0'}>
       {trail.map(p=><span key={'t'+p.frame} data-overlay="trail" className="ov-dot ov-trail" style={markerAt(p)}/>)}
       {nowEstimated&&!nowObserved&&<span data-overlay="estimated" className="ov-dot ov-estimated" style={markerAt(nowEstimated)}/>}
@@ -158,7 +177,12 @@ export function PitchVideoPlayer({videoUrl,releaseFrame,gloveFrame,totalFrames,f
      {showMarks&&<button type="button" id="set-release-time" aria-pressed={Boolean(events.release)} disabled={!canMark} onClick={()=>mark('release')} className={`ov-pill ${events.release?'ov-pill-release-on':'ov-pill-release'}`}>{events.release?`出手 ${evLabel(events.release)}`:'標記出手'}</button>}
      {assist&&<div id="assist-banner" role="status" className="ov-banner">
       <p className="font-bold text-sm">{assist.text}</p>
-      <button type="button" id="assist-skip" onClick={assist.onSkip} className="ov-pill">略過，直接看結果</button>
+      <p id="assist-count" className="text-xs text-cyan-200">已點 {assist.count} 個（至少 {assist.min}、最多 {assist.max}）</p>
+      <div className="grid grid-cols-2 gap-1.5 w-full">
+       <button type="button" id="assist-noball" onClick={assist.onNoBall} className="ov-pill !max-w-none">這格看不到球</button>
+       <button type="button" id="assist-done" disabled={assist.count<assist.min} onClick={assist.onDone} className="ov-pill !max-w-none ov-pill-go">完成並重新分析</button>
+      </div>
+      <button type="button" id="assist-skip" onClick={assist.onSkip} className="ov-pill !max-w-none w-full">略過，直接看結果</button>
      </div>}
      {!showMarks&&!assist&&<span/>}
      <div className="ov-cluster">
@@ -172,11 +196,18 @@ export function PitchVideoPlayer({videoUrl,releaseFrame,gloveFrame,totalFrames,f
       <div className="flex flex-wrap items-center gap-1.5 min-w-0">
        {statusLine}
        <span id="flight-time-status" role="status" className="ov-chip text-cyan-200">{flightText}</span>
+       {showPreview&&previewShrunk&&<span id="preview-shrunk-chip" className="ov-chip text-amber-200">預覽已縮小（推算畫面，非實拍）</span>}
        {overlayOn&&<span className="ov-chip text-[10px]"><span className="ov-legend ov-observed"/>程式找到的球 <span className="ov-legend ov-estimated"/>推估</span>}
        {overlayOn&&overlay!.observed.length===0&&<span id="no-ball-chip" className="ov-chip text-amber-200">程式沒有找到球</span>}
       </div>
       {isFull&&showMarks&&events.release&&events.glove&&onNext&&<button type="button" id="btn-next-analyze" onClick={onNext} disabled={busy} className="ov-next pointer-events-auto">下一步<ChevronRight size={18}/></button>}
      </div>
+     {confirm&&<div id="confirm-bar" className="flex flex-wrap items-center gap-1.5 pointer-events-auto">
+      <span id="confirm-status" role="status" className="ov-chip">{confirm.label?(confirm.label.kind==='confirmed'?'已確認':confirm.label.kind==='corrected'?'已修正':'已標：這格沒有球'):confirm.program?(confirm.program.source==='estimated'?'程式只有推估':'程式找到的球點'):'程式沒有球點：點畫面標出球'}</span>
+      <button type="button" id="confirm-ok" disabled={!(confirm.program||confirm.label)||confirm.label?.kind==='no_ball'} onClick={confirm.onConfirm} className="ov-pill ov-pill-go !max-w-none">正確</button>
+      <button type="button" id="confirm-noball" onClick={confirm.onNoBall} className="ov-pill !max-w-none">這格沒有球</button>
+      <button type="button" id="confirm-clear" disabled={!confirm.label} onClick={confirm.onClear} className="ov-pill !max-w-none">清除</button>
+     </div>}
      {scrubRow}
     </div>}
    </div>}
@@ -193,7 +224,7 @@ export function PitchVideoPlayer({videoUrl,releaseFrame,gloveFrame,totalFrames,f
        <p className="text-xs font-bold text-slate-300">時間格線</p>
        <div className="grid grid-cols-2 gap-2"><button id="mode-source" className={`mode-toggle ${!fine?'mode-active':''}`} aria-pressed={!fine} disabled={busy} onClick={()=>switchMode(false)}>原始影格</button><button id="mode-fine" className={`mode-toggle ${fine?'mode-active':''}`} aria-pressed={fine} disabled={Boolean(fineBlockReason)} aria-describedby="fine-mode-reason" onClick={()=>switchMode(true)}>90 FPS 補幀</button></div>
        <p id="fine-mode-reason" role="status" className="text-xs text-amber-200">{fineBlockReason}</p>
-       {fine&&<p className="text-[11px] text-amber-200" title={preview?.quality.note}>推算，非90FPS實拍；原始影格完整保留。{previewState==='processing'?'處理中，目前顯示來源画面…':previewState==='failed'?previewError:preview?`${preview.width}×${preview.height} 原始像素合成；${preview.quality.level==='low'?'低品質，可退回原始影格':'品質有限'}，棒球位置未驗證。`:''}</p>}
+       {fine&&<p className="text-[11px] text-amber-200" title={preview?.quality.note}>推算，非90FPS實拍；原始影格完整保留。{previewState==='processing'?'處理中，目前顯示來源画面…':previewState==='failed'?previewError:preview?`${preview.width}×${preview.height} 像素合成${previewShrunk?`（預覽已縮小，來源 ${videoRef.current?.videoWidth}×${videoRef.current?.videoHeight}）`:'（原始像素）'}；${preview.quality.level==='low'?'低品質，可退回原始影格':'品質有限'}，棒球位置未驗證。`:''}</p>}
       </div>
       <div className="grid grid-cols-2 gap-2">
        <label className="text-xs text-slate-300">時間 (s)<input id="timeline-time-input" aria-label="定位影片時間" inputMode="decimal" type="number" step="any" min={timestamps[0]??0} max={timestamps.at(-1)??0} value={point.timeSec} disabled={busy} onChange={e=>{const p=points.get(points.nearest(Number(e.target.value)));if(p)seek(p);}} className="field mt-1 font-mono"/></label>

@@ -49,7 +49,20 @@ try{
       }
       row.frameMapping=probe;
       row.mappingOk=probe.every(p=>p.diffSec!==null&&Math.abs(p.diffSec)<.0015);
-      row.pass=row.pass&&row.mappingOk;
+      // 90 FPS interpolation preview on the 4K original: must switch on (previewed at a reduced size) and allow marking.
+      await page.locator('#player-menu-btn').click();
+      const fineEnabled=await page.locator('#mode-fine').isEnabled();
+      await page.locator('#mode-fine').click();await page.locator('#player-menu-close').click();
+      await page.locator('#step-forward').click();
+      await page.waitForFunction(()=>['ready','failed'].includes(document.querySelector('#interpolated-preview')?.dataset.previewState),null,{timeout:120000}).catch(()=>{});
+      const preview=await page.locator('#interpolated-preview').evaluate(c=>({state:c.dataset.previewState,width:c.width,height:c.height})).catch(()=>null);
+      const shrunkChip=await page.locator('#preview-shrunk-chip').count()===1&&await page.locator('#preview-shrunk-chip').isVisible();
+      await page.screenshot({path:resolve(out,'72-iphone-mov-90fps-'+(f.name.startsWith('直')?'straight':'knuckle')+'.png')});
+      await page.locator('#set-release-time').click();
+      const marked=/出手 F\d+\.\d/.test(await page.locator('#set-release-time').innerText());
+      row.fps90={fineEnabled,preview,shrunkChip,marked,sourceSize:row.video?[row.video.width,row.video.height]:null};
+      row.fps90Ok=fineEnabled&&preview?.state==='ready'&&Math.max(preview.width,preview.height)<=1920&&shrunkChip&&marked;
+      row.pass=row.pass&&row.mappingOk&&row.fps90Ok;
       await page.screenshot({path:resolve(out,'71-iphone-mov-mark-'+(f.name.startsWith('直')?'straight':'knuckle')+'.png')});
     }else row.pass=false;
     await page.screenshot({path:resolve(out,'70-iphone-mov-'+(f.name.startsWith('直')?'straight':'knuckle')+'.png')});

@@ -1,5 +1,5 @@
 import {chromium} from '@playwright/test';
-import {mkdir,writeFile} from 'node:fs/promises';
+import {mkdir,writeFile,readFile} from 'node:fs/promises';
 import {resolve} from 'node:path';
 import {spawn} from 'node:child_process';
 import assert from 'node:assert/strict';
@@ -61,6 +61,21 @@ try{
     }
     await encoder.flush();encoder.close();if(error)throw Error(error);return{width,height,chunks,config};
   },{pts,RELEASE,GLOVE,ball});
+  const encodeBig=()=>page.evaluate(async({pts})=>{
+    const width=2160,height=3840,canvas=document.createElement('canvas');canvas.width=width;canvas.height=height;const ctx=canvas.getContext('2d'),chunks=[];let config,error;
+    const encoder=new VideoEncoder({output:(chunk,meta)=>{const bytes=new Uint8Array(chunk.byteLength);chunk.copyTo(bytes);chunks.push({timestamp:chunk.timestamp,type:chunk.type,bytes:Array.from(bytes)});if(meta.decoderConfig?.description)config=Array.from(new Uint8Array(meta.decoderConfig.description));},error:e=>{error=e.message;}});
+    const options={codec:'avc1.640033',width,height,bitrate:12000000,latencyMode:'realtime',avc:{format:'avc'}};
+    if(!(await VideoEncoder.isConfigSupported(options)).supported)throw Error('Browser H.264 4K test encoder unavailable');encoder.configure(options);
+    for(let i=0;i<pts.length;i++){
+      ctx.fillStyle='#2a3b2c';ctx.fillRect(0,0,width,height);
+      for(let y=0;y<height;y+=48)for(let x=0;x<width;x+=48){ctx.fillStyle=((x*7+y*13)%5)?'#27382a':'#314434';ctx.fillRect(x,y,48,48);}
+      ctx.fillStyle='#f8fafc';ctx.beginPath();ctx.arc(300+i*40,1200+i*60,60,0,Math.PI*2);ctx.fill();
+      ctx.fillStyle='#fff';ctx.font='96px monospace';ctx.fillText('F'+i,60,140);
+      const frame=new VideoFrame(canvas,{timestamp:pts[i],duration:pts[1]});encoder.encode(frame,{keyFrame:i%10===0});frame.close();
+      if(encoder.encodeQueueSize>3)await new Promise(r=>encoder.addEventListener('dequeue',r,{once:true}));
+    }
+    await encoder.flush();encoder.close();if(error)throw Error(error);return{width,height,chunks,config};
+  },{pts:Array.from({length:30},(_,i)=>Math.round(i*1e6/24))});
   const clips={};
   for(const [name,ball,rate] of [['ball',true,1],['noball',false,1],['ratepatched',true,2]]){
     const encoded=name==='ratepatched'?clips.ballEncoded:await encode(ball);
@@ -69,6 +84,7 @@ try{
     clips[name]=mux({...encoded,pts,lastDuration:pts[1]},rate);
   }
 
+  {const big=await encodeBig(),bigPts=Array.from({length:30},(_,i)=>Math.round(i*1e6/24));clips.big=mux({...big,pts:bigPts,lastDuration:Math.round(1e6/24)});}
   const checkLayout=async name=>{
     for(const width of [360,390,430]){
       await page.setViewportSize({width,height:844});await page.waitForTimeout(80);
@@ -167,6 +183,9 @@ try{
   await page.locator('#result-screen').waitFor({timeout:120000});
   ok('engine loaded only after pressing analyze',report.engineRequests.length>0);
   ok('reliable ball found: no tap prompt',await page.locator('#assist-banner').count()===0);
+  const summaryText=await page.locator('#ball-track-summary').innerText();report.ballTrackSummary=summaryText.split('\n')[0];
+  ok('result says how many ball points were found in the video',/影片中找到 \d+ 個球點/.test(summaryText));
+  ok('at least 4 ball points found on the synthetic pitch',Number(await page.locator('#ball-track-summary').getAttribute('data-observed'))>=4);
 
   // ── 4. 結果：影片上的球點、影片／2D 切換 ─────────────────────
   report.resultCards=await page.locator('#result-cards').innerText();
@@ -191,10 +210,61 @@ try{
   await page.locator('#step-forward').click();await waitSeek();
   await checkLayout('05-result-video');await shot('30-ball-dots-on-video');
   await page.locator('#view-tab-twod').click();await page.locator('#pitch-canvas').waitFor();
+  ok('2D view separates model path from points found in the video',/影片中找到 \d+ 個球點/.test(await page.locator('#twod-found').innerText())&&/模型推算的球路/.test(await page.locator('#twod-legend').innerText())&&/影片中找到的球點/.test(await page.locator('#twod-legend').innerText()));
   await page.locator('#btn-toggle-play').click();await page.waitForTimeout(1200);
   await checkLayout('06-result-2d');await shot('31-result-2d-animation');
   await page.locator('#view-tab-video').click();
   await page.locator('#result-cards').scrollIntoViewIfNeeded();await shot('32-result-cards',true);
+  // ── 4b. 確認球點：正確／拖曳修正／這格沒有球、匯出、重新分析
+  const stage0=async()=>page.locator('.player-stage').boundingBox();
+  await page.locator('#btn-confirm-mode').click();ok('confirm mode on',await page.locator('#btn-confirm-mode').getAttribute('aria-pressed')==='true');
+  await page.locator('#player-section').scrollIntoViewIfNeeded();
+  await gotoFrame(found.frame);await page.waitForFunction(f=>Number(document.querySelector('#current-time-status')?.dataset.sourceIndex)===f,found.frame);
+  ok('confirm bar shows the program point on a detected frame',/程式找到的球點/.test(await page.locator('#confirm-status').innerText())&&await page.locator('#confirm-handle').count()===1);
+  await shot('80-confirm-points');
+  await page.locator('#confirm-ok').click();
+  ok('"correct" confirms the point',/已確認/.test(await page.locator('#confirm-status').innerText())&&/確認 1／修正 0／沒有球 0/.test(await page.locator('#label-summary').innerText()));
+  // move to another frame and correct it by dragging the handle
+  await page.locator('#step-forward').click();await waitSeek();await page.locator('#step-forward').click();await waitSeek();
+  const f2=found.frame+2;await page.waitForFunction(f=>Number(document.querySelector('#current-time-status')?.dataset.sourceIndex)===f,f2);
+  const handle=page.locator('#confirm-handle');
+  if(await handle.count()===0){const sb=await stage0();await page.locator('.player-stage').click({position:{x:sb.width*.5,y:sb.height*.4}});}
+  await handle.waitFor();
+  const hb=await handle.boundingBox(),hx=hb.x+hb.width/2,hy=hb.y+hb.height/2;
+  await page.mouse.move(hx,hy);await page.mouse.down();await page.mouse.move(hx+26,hy+18,{steps:5});await page.mouse.up();
+  const hb2=await page.locator('#confirm-handle').boundingBox();report.dragMoved={dx:hb2.x-hb.x,dy:hb2.y-hb.y};
+  ok('dragging the handle corrects the point',/已修正/.test(await page.locator('#confirm-status').innerText())&&Math.abs(report.dragMoved.dx-26)<6&&Math.abs(report.dragMoved.dy-18)<6);
+  // "no ball on this frame"
+  await page.locator('#step-forward').click();await waitSeek();
+  await page.locator('#confirm-noball').click();
+  ok('"no ball on this frame" is recorded',/沒有球/.test(await page.locator('#confirm-status').innerText())&&/確認 1／修正 1／沒有球 1/.test(await page.locator('#label-summary').innerText()));
+  await shot('81-confirm-labelled');
+  const stored=await page.evaluate(()=>{const k=Object.keys(localStorage).filter(x=>x.startsWith('pitchvision.ballLabels.v1:'));return k.map(x=>({key:x,labels:JSON.parse(localStorage.getItem(x))}));});
+  report.storedLabels=stored.map(x=>({key:x.key,statuses:x.labels.map(l=>l.frame+':'+l.status)}));
+  ok('labels are stored on this device (localStorage)',stored.length===1&&stored[0].labels.length===3&&new Set(stored[0].labels.map(l=>l.status)).size===3);
+  // export: coordinates and metadata only, no pixels
+  const [download]=await Promise.all([page.waitForEvent('download'),page.locator('#btn-export-labels').click()]);
+  const exported=JSON.parse(await readFile(await download.path(),'utf8'));
+  report.exportedLabels={file:download.suggestedFilename(),schema:exported.schema,count:exported.labels?.length,video:exported.video};
+  ok('export is a .ball-labels.json file with the documented schema',/\.ball-labels\.json$/.test(download.suggestedFilename())&&exported.schema==='pitchvision.ball-labels'&&exported.version===1&&exported.labels.length===3&&exported.video.fileName==='synthetic-pitch-60fps.mp4'&&Math.abs(exported.video.fps-60)<.01);
+  ok('export has coordinates and statuses but no image data',JSON.stringify(exported).length<4000&&exported.labels.every(l=>['confirmed','corrected','no_ball'].includes(l.status)&&(l.status==='no_ball'?l.xNorm===null:Number.isFinite(l.xNorm)))&&!/data:image|base64|pixels/.test(JSON.stringify(exported)));
+  // re-analysis uses the confirmed/corrected points as anchors: the corrected frame's marker lands on the corrected position
+  const corrected=exported.labels.find(l=>l.status==='corrected');
+  await page.locator('#btn-reanalyze-labels').click();await page.locator('#result-screen').waitFor({timeout:120000});
+  ok('re-analysis with labels completes and keeps the labels',/已標 3 格/.test(await page.locator('#label-summary').innerText()));
+  await gotoFrame(corrected.frame);await page.waitForFunction(f=>Number(document.querySelector('#current-time-status')?.dataset.sourceIndex)===f,corrected.frame);
+  await page.locator('#btn-confirm-mode').click(); // leave confirm mode so only the program overlay is drawn
+  const anchored=await page.evaluate(()=>{const d=document.querySelector('[data-overlay=observed]');if(!d)return null;const dr=d.getBoundingClientRect(),v=document.querySelector('video'),r=v.getBoundingClientRect(),s=Math.min(r.width/v.videoWidth,r.height/v.videoHeight),w=v.videoWidth*s,h=v.videoHeight*s,ox=r.x+(r.width-w)/2,oy=r.y+(r.height-h)/2;return{x:(dr.x+dr.width/2-ox)/w,y:(dr.y+dr.height/2-oy)/h};});
+  report.anchoredMarker={corrected:{x:corrected.xNorm,y:corrected.yNorm},drawn:anchored};
+  ok('the corrected point is used as an anchor in the new analysis',Boolean(anchored)&&Math.hypot((anchored.x-corrected.xNorm)*360,(anchored.y-corrected.yNorm)*640)<4);
+  await page.locator('#btn-confirm-mode').click();
+  await page.locator('#btn-clear-labels').scrollIntoViewIfNeeded();await page.locator('#btn-clear-labels').click();
+  ok('clearing removes the labels from this device',/已標 0 格/.test(await page.locator('#label-summary').innerText())&&await page.evaluate(()=>Object.keys(localStorage).filter(x=>x.startsWith('pitchvision.ballLabels.v1:')).length)===0);
+  await page.locator('#btn-confirm-mode').click();await gotoFrame(found.frame);await page.locator('#confirm-ok').click();await page.locator('#step-forward').click();await waitSeek();await page.locator('#confirm-noball').click();
+  report.labelsBeforeReload=await page.evaluate(()=>Object.keys(localStorage).filter(x=>x.startsWith('pitchvision.ballLabels.v1:')).length);
+  ok('labels written again for the persistence check',report.labelsBeforeReload===1);
+  await page.locator('#btn-confirm-mode').click();
+
   // back to marking after analysis: the same video page keeps the dots
   await page.locator('#btn-back-mark').click();await page.locator('#set-release-time').waitFor();
   ok('video page still shows the overlay after analysis',await page.locator('#ball-overlay').count()===1);
@@ -212,34 +282,78 @@ try{
   await checkLayout('07-science-advanced');await page.locator('#ground-calibration').scrollIntoViewIfNeeded();await shot('40-science-advanced');
   await page.locator('#btn-close-science').click();
 
-  // ── 6. 找不到球：只在需要時要求「點一下球」───────────────────
-  await page.goto(base,{waitUntil:'networkidle'});
-  await upload(clips.noball,'synthetic-no-ball.mp4');await page.locator('#video-summary').waitFor({timeout:20000});
+  // ── 5b. 標記跨重新整理保留：同一支影片重新載入後仍在，並在分析後出現在摘要
+  await page.reload({waitUntil:'networkidle'});
+  ok('labels survive a page reload (same device)',await page.evaluate(()=>Object.keys(localStorage).filter(x=>x.startsWith('pitchvision.ballLabels.v1:')).length)===1);
+  await upload(clips.ball,'synthetic-pitch-60fps.mp4');await page.locator('#video-summary').waitFor({timeout:20000});
   await page.locator('#btn-next-mark').click();await page.locator('#set-release-time').waitFor();await waitSeek();
   await gotoFrame(RELEASE);await page.locator('#set-release-time').click();await gotoFrame(GLOVE);await page.locator('#set-glove-time').click();
-  await page.locator('#btn-next-analyze').click();await page.locator('#btn-start-analysis').click();
+  await page.locator('#btn-next-analyze').click();await page.locator('#btn-start-analysis').click();await page.locator('#result-screen').waitFor({timeout:120000});
+  ok('the same video loads its stored labels',/已標 2 格/.test(await page.locator('#label-summary').innerText()));
+  await page.evaluate(()=>{for(const k of Object.keys(localStorage))if(k.startsWith('pitchvision.ballLabels.v1:'))localStorage.removeItem(k);});
+
+  // ── 6. 找不到球：新找球模組找不到時才要求點球；自由移動、點 2–5 個、可按「這格看不到球」
+  const prepNoBall=async()=>{
+    await page.goto(base,{waitUntil:'networkidle'});
+    await upload(clips.noball,'synthetic-no-ball.mp4');await page.locator('#video-summary').waitFor({timeout:20000});
+    await page.locator('#btn-next-mark').click();await page.locator('#set-release-time').waitFor();await waitSeek();
+    await gotoFrame(RELEASE);await page.locator('#set-release-time').click();await gotoFrame(GLOVE);await page.locator('#set-glove-time').click();
+    await page.locator('#btn-next-analyze').click();await page.locator('#btn-start-analysis').click();
+  };
+  const frameNow=()=>page.locator('#current-time-status').evaluate(e=>Number(e.dataset.sourceIndex));
+  const tapStage=async(fx,fy)=>{const sb=await page.locator('.player-stage').boundingBox();await page.locator('.player-stage').click({position:{x:sb.width*fx,y:sb.height*fy}});};
+  await prepNoBall();
   await page.locator('#assist-banner').waitFor({timeout:120000});
   const assistText=await page.locator('#assist-banner').innerText();report.assistText=assistText;
-  ok('prompt asks to tap the ball',/點一下球/.test(assistText));
+  ok('prompt asks to tap a visible ball that has left the hand',/找不到球/.test(assistText)&&/球已離手/.test(assistText)&&/點一下球/.test(assistText));
   ok('prompt uses no technical terms',!/索引|角點|錨點|index|frame/i.test(await bodyText()));
-  await waitSeek();await shot('50-assist-tap-prompt');
-  const as=await page.locator('.player-stage').boundingBox();
-  await page.locator('.player-stage').click({position:{x:as.width*.5,y:as.height*.55}});
-  await page.locator('#assist-banner').waitFor();await page.waitForFunction(()=>/再點一下球/.test(document.querySelector('#assist-banner')?.innerText||''));
-  await waitSeek();await shot('51-assist-second-tap');
-  await page.locator('.player-stage').click({position:{x:as.width*.52,y:as.height*.7}});
+  await waitSeek();await page.waitForFunction(f=>Number(document.querySelector('#current-time-status')?.dataset.sourceIndex)===f,RELEASE+1);
+  ok('the prompt starts one frame after the release',await frameNow()===RELEASE+1);
+  ok('"done" needs at least two taps',await page.locator('#assist-done').isDisabled()&&/已點 0 個/.test(await page.locator('#assist-count').innerText()));
+  await shot('50-assist-tap-prompt');
+  await tapStage(.5,.55);ok('first tap counted',/已點 1 個/.test(await page.locator('#assist-count').innerText()));
+  await page.locator('#step-forward').click();await waitSeek();
+  await page.locator('#assist-noball').click();await waitSeek();
+  ok('"no ball on this frame" moves on to the next frame and adds no point',await frameNow()===RELEASE+3&&/已點 1 個/.test(await page.locator('#assist-count').innerText()));
+  await page.locator('#step-forward').click();await waitSeek();
+  ok('frames can be stepped freely with −1 / +1',await frameNow()===RELEASE+4);
+  await page.locator('#step-back').click();await waitSeek();ok('and back',await frameNow()===RELEASE+3);
+  await tapStage(.52,.62);ok('second tap counted, done enabled',/已點 2 個/.test(await page.locator('#assist-count').innerText())&&await page.locator('#assist-done').isEnabled());
+  await shot('51-assist-two-taps');
+  await page.locator('#assist-done').click();
   await page.locator('#result-screen').waitFor({timeout:120000});
-  ok('result appears right after the second tap',await page.locator('#result-cards').isVisible());
-  ok('no-ball clip shows a "no ball found" note in the video view',await page.locator('#ball-overlay').count()===1);
+  ok('result appears after "done", with no second prompt',await page.locator('#result-cards').isVisible()&&await page.locator('#assist-banner').count()===0);
+  ok('the video view says what was found',await page.locator('#ball-track-summary').count()===1);
   await shot('52-result-after-assist');
   // skip path
-  await page.goto(base,{waitUntil:'networkidle'});
-  await upload(clips.noball,'synthetic-no-ball.mp4');await page.locator('#video-summary').waitFor({timeout:20000});
-  await page.locator('#btn-next-mark').click();await page.locator('#set-release-time').waitFor();await waitSeek();
-  await gotoFrame(RELEASE);await page.locator('#set-release-time').click();await gotoFrame(GLOVE);await page.locator('#set-glove-time').click();
-  await page.locator('#btn-next-analyze').click();await page.locator('#btn-start-analysis').click();
+  await prepNoBall();
   await page.locator('#assist-skip').waitFor({timeout:120000});await page.locator('#assist-skip').click();
   await page.locator('#result-screen').waitFor();ok('skipping goes straight to the result',await page.locator('#result-cards').isVisible());
+  ok('no ball found is stated in words',/影片中沒有找到球/.test(await page.locator('#ball-track-summary').innerText())||await page.locator('#ball-track-summary').getAttribute('data-status')==='tracked');
+  // five taps start the analysis by themselves
+  await prepNoBall();
+  await page.locator('#assist-banner').waitFor({timeout:120000});await waitSeek();
+  for(let i=0;i<5;i++){await tapStage(.5+i*.01,.55+i*.02);if(i<4){await page.locator('#step-forward').click();await waitSeek();}}
+  await page.locator('#result-screen').waitFor({timeout:120000});ok('the fifth tap finishes the prompt and analyses',await page.locator('#result-cards').isVisible());
+
+  // ── 6b. 4K 尺寸（2160×3840）影片：90 FPS 補幀可切換並完成標記，畫面標示「預覽已縮小」
+  await page.goto(base,{waitUntil:'networkidle'});
+  await upload(clips.big,'synthetic-4k-24fps.mp4');await page.locator('#video-summary').waitFor({timeout:60000});
+  ok('4K clip loads with its FPS read',/^24 FPS/.test(await page.locator('#video-info').innerText()));
+  await page.locator('#btn-next-mark').click();await page.locator('#set-release-time').waitFor();await waitSeek();
+  await openMenu();
+  ok('90 FPS can be switched on for a 4K source (not blocked)',await page.locator('#mode-fine').isEnabled());
+  await page.locator('#mode-fine').click();await closeMenu();
+  await page.locator('#step-forward').click();
+  await page.waitForFunction(()=>['ready','failed'].includes(document.querySelector('#interpolated-preview')?.dataset.previewState),null,{timeout:90000});
+  report.big90={state:await page.locator('#interpolated-preview').getAttribute('data-preview-state'),canvas:await page.locator('#interpolated-preview').evaluate(c=>[c.width,c.height])};
+  ok('the 4K preview is produced (state ready)',report.big90.state==='ready');
+  ok('preview is scaled down to about 1920 on the long side',Math.max(...report.big90.canvas)<=1920&&Math.max(...report.big90.canvas)>=1000);
+  ok('the screen says the preview was shrunk',await page.locator('#preview-shrunk-chip').isVisible());
+  await shot('90-big-90fps-preview');
+  await page.locator('#set-release-time').click();
+  ok('a 90 FPS position on a 4K clip can be marked as release',/出手 F\d+\.\d/.test(await page.locator('#set-release-time').innerText()));
+  await shot('91-big-90fps-marked');
 
   // ── 7. 讀不到影格時間：一次性 FPS 小視窗 ─────────────────────
   await page.goto(base,{waitUntil:'networkidle'});

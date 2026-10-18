@@ -24,7 +24,10 @@ import {ResultCards} from './components/ResultCards';
 import {AutoDetectPanel} from './components/AutoDetectPanel';
 import {GroundCalibration} from './components/GroundCalibration';
 import {FpsDialog} from './components/FpsDialog';
-import {UploadCloud,Loader2,AlertTriangle,CheckCircle,Info,ChevronRight,RotateCcw,FlaskConical} from 'lucide-react';
+import type {BallAnchor} from './services/pitchBallTracker';
+import type {BallTrackSummary} from './analysisRuntime';
+import {BallLabel,labelsKey,loadLabels,saveLabels,upsertLabel,removeLabel,labelsToAnchors,labelsToNoBall,buildLabelExport,downloadLabelExport} from './services/ballLabels';
+import {UploadCloud,Loader2,AlertTriangle,CheckCircle,Info,ChevronRight,RotateCcw,FlaskConical,Download} from 'lucide-react';
 
 type Step=NavStep|'assist';
 type AnalysisOutcomeDone=Extract<Awaited<ReturnType<AnalysisRuntime['runPitchAnalysis']>>,{status:'done'}>;
@@ -60,7 +63,7 @@ export default function App() {
   const [scienceOpen,setScienceOpen]=useState(false);
   const [cameraGeometry,setCameraGeometry]=useState<CameraGeometry|null>(null);
   const analysisDistance=cameraGeometry?.method==='planar_reference'?cameraGeometry.referenceLengthM!:biometrics.effectiveTravelDistanceM;
-  const setEvent=(name:'release'|'glove',event:SelectedEvent)=>{setEvents(prev=>({...prev,[name]:event}));setHasAnalyzed(false);if(name==='glove')setVisibleEndFrame(event.right);setManualAnchor(prev=>prev?{...prev,[name==='release'?'point1':'point2']:undefined}:null);};
+  const setEvent=(name:'release'|'glove',event:SelectedEvent)=>{setEvents(prev=>({...prev,[name]:event}));setHasAnalyzed(false);if(name==='glove')setVisibleEndFrame(event.right);};
   // Preview-only positions are not source PTS or measured frames. Quantitative
   // analysis still requires the unchanged source timing validation.
   const selectionOnly=!videoTiming?.timestamps.length;
@@ -74,9 +77,6 @@ export default function App() {
   const markRelease=(frame:number)=>{if(controlTimes[frame]!==undefined)setEvent('release',{...selectEvent(describePosition(controlTimes,controlTimes[frame],videoTiming?.timeBase!=='timestamp'),controlTimes),...(selectionOnly?{sourceSpanSec:NaN,previewQuality:'unavailable' as const}:{})});};
   const markGlove=(frame:number)=>{if(controlTimes[frame]!==undefined)setEvent('glove',{...selectEvent(describePosition(controlTimes,controlTimes[frame],videoTiming?.timeBase!=='timestamp'),controlTimes),...(selectionOnly?{sourceSpanSec:NaN,previewQuality:'unavailable' as const}:{})});};
 
-  // Manual ball positions are no longer a visible control: they are collected only by the
-  // "tap the ball" prompt when the program cannot find it (see assist* below).
-  const [manualAnchor,setManualAnchor]=useState<ManualAnchorInput|null>(null);
 
   // 球種設定與 Strict Mode 控制
   const [selectedPitchType,setSelectedPitchType]=useState<string>(PITCH_TYPE_OPTIONS[0]);
@@ -111,12 +111,15 @@ export default function App() {
   const [viewTab,setViewTab]=useState<'video'|'twod'>('video');
   useEffect(()=>setViewTab('video'),[userVideoUrl]);
 
-  // "Tap the ball" assist (only when the program could not find a reliable ball track)
-  const [assistStage,setAssistStage]=useState<1|2|null>(null);
-  const [assistNote,setAssistNote]=useState<string|null>(null);
-  const assistFrames=useRef<{first:number;second:number}>({first:0,second:0});
-  const assistFirst=useRef<NonNullable<ManualAnchorInput['point1']>|null>(null);
+  // "Tap the ball" assist: only when the new ball finder found no ball (or too few points). 2–5 taps on frames of the
+  // user's choosing; a frame can also be marked "no ball here".
+  const [assistPoints,setAssistPoints]=useState<BallAnchor[]>([]);
+  const [assistNoBall,setAssistNoBall]=useState<number[]>([]);
   const pendingOutcome=useRef<AnalysisOutcomeDone|null>(null);
+  const [ballTrack,setBallTrack]=useState<BallTrackSummary|null>(null);
+  // Ball-point labels (confirm / correct / "no ball"): kept in this browser per video, exportable as JSON.
+  const [confirmMode,setConfirmMode]=useState(false);
+  const [labelBox,setLabelBox]=useState<{key:string|null;items:BallLabel[]}>({key:null,items:[]});
 
   // FPS question (only when the container timing cannot be read)
   const [fpsDialogOpen,setFpsDialogOpen]=useState(false);
@@ -129,6 +132,11 @@ export default function App() {
   const [pythonSource,setPythonSource]=useState<string|null>(null);
 
   const isVideoLoaded=Boolean(userVideoUrl&&videoLoadStatus==='ready');
+  const labelKey=useMemo(()=>videoTiming&&videoFileName&&isVideoLoaded?labelsKey({fileName:videoFileName,width:videoTiming.width,height:videoTiming.height,fps:videoFps,frames:totalVideoFrames,durationSec:videoTiming.durationSec}):null,[videoTiming?.width,videoTiming?.height,videoTiming?.durationSec,videoFileName,isVideoLoaded,videoFps,totalVideoFrames]);
+  useEffect(()=>{setLabelBox({key:labelKey,items:labelKey?loadLabels(labelKey):[]});},[labelKey]);
+  const labels=labelBox.key===labelKey?labelBox.items:[];
+  useEffect(()=>{if(labelKey&&labelBox.key===labelKey)saveLabels(labelKey,labelBox.items);},[labelBox,labelKey]);
+  const updateLabels=(fn:(items:BallLabel[])=>BallLabel[])=>setLabelBox(b=>({key:labelKey,items:fn(b.key===labelKey?b.items:[])}));
   const busy=isAnalyzing||isAutoDetectingFrames;
 
   const sourceTimesValid=useMemo(()=>hasUsableSourceTimes(videoTiming),[videoTiming]);
@@ -152,8 +160,8 @@ export default function App() {
   const resetForNewVideo=()=>{
     setVideoFps(NaN);setTotalVideoFrames(0);setVideoFileName('');setCurrentVideoFrame(0);setTargetFrameSeek(null);setVisibleEndFrame(0);
     setEvents({release:null,glove:null});setAnalyzedEvents(null);setCompletedResult(null);setCompletedVelocity(null);setDetections([]);setCurrentViewKind('original');setUserVideoUrl(null);setVideoTiming(null);setCameraGeometry(null);
-    setHasAnalyzed(false);setAiDetection(null);setAutoDetectResult(null);setVideoTrack([]);setVideoMetrics(null);setConfidenceScores(null);setManualAnchor(null);
-    setAssistStage(null);setAssistNote(null);pendingOutcome.current=null;assistFirst.current=null;setFpsDialogOpen(false);setFpsError(null);
+    setHasAnalyzed(false);setAiDetection(null);setAutoDetectResult(null);setVideoTrack([]);setVideoMetrics(null);setConfidenceScores(null);
+    setAssistPoints([]);setAssistNoBall([]);setBallTrack(null);setConfirmMode(false);pendingOutcome.current=null;setFpsDialogOpen(false);setFpsError(null);
   };
 
   // 統一 Video Loading Controller：同一支檔案重選也能觸發
@@ -194,7 +202,7 @@ export default function App() {
       const confirmed=confirmCfrTiming(videoTiming,fps,events);
       setVideoTiming(confirmed.timing);setVideoFps(confirmed.timing.actualFps);setTotalVideoFrames(confirmed.timing.totalFrames);
       setEvents(confirmed.events);setVisibleEndFrame(confirmed.events.glove?.right??0);
-      setManualAnchor(null);setAiDetection(null);setAutoDetectResult(null);
+      setAiDetection(null);setAutoDetectResult(null);setBallTrack(null);
       setVideoTrack([]);setVideoMetrics(null);setConfidenceScores(null);setAnalyzedEvents(null);setCompletedResult(null);setDetections([]);
       const cursor=videoElementRef.current?.currentTime??0;
       const frame=describePosition(confirmed.timing.timestamps,Math.min(cursor,confirmed.timing.timestamps.at(-1)!),true).left;
@@ -222,7 +230,7 @@ export default function App() {
       const result=await AutoFrameDetectionEngine.detectReleaseAndGloveFrames({
         videoElement:videoEl,actualFps:videoFps,totalFrames:totalVideoFrames,
         durationSec:videoTiming?.durationSec||videoEl.duration||totalVideoFrames/videoFps,
-        cameraView:cameraViewMode,selectedPitchType,manualAnchor:manualAnchor||undefined,
+        cameraView:cameraViewMode,selectedPitchType,manualAnchor:undefined,
         videoWidth:videoEl.videoWidth||videoTiming?.width||720,videoHeight:videoEl.videoHeight||videoTiming?.height||1280,
         timestamps:videoTiming?.timestamps,
         onProgress:(pct,text)=>{if(generation!==autoGeneration.current)throw Error('使用者停止自動辨識');setAutoDetectProgress(pct);setAutoDetectStageText(text);}
@@ -249,16 +257,22 @@ export default function App() {
 
   const commitOutcome=(outcome:AnalysisOutcomeDone,ranEvents:SelectedEvents)=>{
     setCompletedResult(outcome.result);setCompletedVelocity({velocityKmh:outcome.velocityKmh,flightSeconds:outcome.flightSeconds,flightFrames:outcome.flightFrames});
-    setDetections(outcome.detections);setAnalyzedEvents(ranEvents);
-    setAnalysisProgress(100);setHasAnalyzed(true);setAssistStage(null);setAssistNote(null);pendingOutcome.current=null;
+    setDetections(outcome.detections);setAnalyzedEvents(ranEvents);setBallTrack(outcome.ballTrack);
+    setAnalysisProgress(100);setHasAnalyzed(true);setAssistPoints([]);setAssistNoBall([]);pendingOutcome.current=null;
     setStep('result');
   };
   const seekTo=(frame:number)=>{setTargetFrameSeek(null);requestAnimationFrame(()=>{setTargetFrameSeek(frame);setCurrentVideoFrame(frame);});};
 
   // 啟動分析：按下時才載入「matchingEngine＋資料庫」分析 chunk
-  const handleStartAnalysis=async(anchorOverride?:ManualAnchorInput|null)=>{
+  const handleStartAnalysis=async(opts?:{taps?:BallAnchor[];noBall?:number[]})=>{
     if(analysisBlockReason){setVideoLoadError(analysisBlockReason);return;}
-    const anchor=anchorOverride!==undefined?anchorOverride:manualAnchor;
+    // Points the user gave: this session's taps plus the labels confirmed on this video (labels win on the same frame).
+    const labelAnchors=labelsToAnchors(labels),labelFrames=new Set(labelAnchors.map(a=>a.frame));
+    const userPoints=[...(opts?.taps??[]).filter(t=>!labelFrames.has(t.frame)),...labelAnchors].sort((a,b)=>a.frame-b.frame);
+    const noBallFrames=[...new Set([...(opts?.noBall??[]),...labelsToNoBall(labels)])];
+    const toPoint=(p:BallAnchor)=>({frame:p.frame,x_norm:p.xNorm,y_norm:p.yNorm});
+    // The old engine path still takes first/last user point as its "manual anchor".
+    const anchor:ManualAnchorInput|null=userPoints.length>=2?{point1:toPoint(userPoints[0]),point2:toPoint(userPoints.at(-1)!)}:null;
     const inputGeneration=analysisInputGeneration.current,ranEvents=events;
     setVideoLoadError(null);setHasAnalyzed(false);
     setIsAnalyzing(true);
@@ -279,7 +293,7 @@ export default function App() {
         videoElement:videoElementRef.current,events,eventView:eventView!,videoTiming,videoFps,totalVideoFrames,
         sourceTimesValid,analysisHasSourceFrames,analysisFps,analysisDistance,releaseFrame,gloveFrame,visibleEndFrame,originalFlightFrames,
         selectedPitchType,cameraViewMode,biometrics,strictPitchTypeMode,allowCrossTypeFallback,manualAnchor:anchor,cameraGeometry,useExistingTracking,
-        hasAiDetection:Boolean(aiDetection),autoDetectConfidence:autoDetectResult?.confidence,isCancelled
+        hasAiDetection:Boolean(aiDetection),autoDetectConfidence:autoDetectResult?.confidence,isCancelled,userPoints,noBallFrames
       },{
         onProgress:(pct,text)=>{if(isCancelled())return;setAnalysisProgress(pct);setAnalysisStepText(text);},
         onVisibleEndFrame:setVisibleEndFrame,
@@ -289,15 +303,15 @@ export default function App() {
         onAiDetection:setAiDetection
       });
       if(outcome.status==='stale'){if(outcome.message)setVideoLoadError(outcome.message);return;}
-      // Ask for one tap only when tracking ran but found no reliable ball, and no tap was given yet.
-      const reliable=Boolean(outcome.result.projection_match?.used&&outcome.result.video_track_status==='VALID_TRACK');
-      const alreadyAssisted=Boolean(anchor?.point1&&anchor?.point2);
-      if(!reliable&&outcome.trackingRan&&!alreadyAssisted&&videoTiming?.timestamps.length&&events.release&&events.glove){
-        const times=videoTiming.timestamps,rel=sourceIndexAt(times,events.release.timeSec),glo=sourceIndexAt(times,events.glove.timeSec);
-        const first=Math.min(rel+2,Math.max(rel,glo-1)),second=Math.max(first+1,glo-2);
-        assistFrames.current={first,second};assistFirst.current=null;pendingOutcome.current=outcome;
-        setAssistNote(null);setAssistStage(1);setStep('assist');seekTo(first);
-        return;
+      // Ask for taps only when the new ball finder found no ball (or too few points) and no taps were given yet.
+      const bt=outcome.ballTrack;
+      if(bt&&bt.engine==='new'&&userPoints.length<2&&videoTiming?.timestamps.length&&events.release&&events.glove){
+        const times=videoTiming.timestamps,rel=sourceIndexAt(times,events.release.timeSec),glo=sourceIndexAt(times,events.glove.timeSec),flight=Math.max(1,glo-rel+1);
+        const tooFew=bt.status==='tracked'&&bt.observedCount<Math.max(4,Math.ceil(flight*.3));
+        if(bt.status==='no_ball_found'||tooFew){
+          pendingOutcome.current=outcome;setAssistPoints([]);setAssistNoBall([]);setStep('assist');seekTo(Math.min(times.length-1,rel+1));
+          return;
+        }
       }
       commitOutcome(outcome,ranEvents);
       requestAnimationFrame(()=>window.scrollTo({top:0}));
@@ -306,18 +320,19 @@ export default function App() {
     }finally{setIsAnalyzing(false);}
   };
 
+  const ASSIST_MIN=2,ASSIST_MAX=5;
+  const finishAssist=(points:BallAnchor[]=assistPoints,noBall:number[]=assistNoBall)=>{pendingOutcome.current=null;setStep('analyze');void handleStartAnalysis({taps:points,noBall});};
   const handleAssistTap=(x:number,y:number)=>{
     const frame=currentVideoFrame;
-    if(assistStage===1){
-      const first={frame,x_norm:x,y_norm:y};assistFirst.current=first;
-      setManualAnchor({point1:first,point2:undefined});setAssistStage(2);setAssistNote(null);seekTo(assistFrames.current.second);
-    }else if(assistStage===2){
-      const first=assistFirst.current;
-      if(!first||frame<=first.frame){setAssistNote('請換到比剛才更後面的畫面，再點一下球。');return;}
-      const anchor:ManualAnchorInput={point1:first,point2:{frame,x_norm:x,y_norm:y}};
-      setManualAnchor(anchor);setAssistStage(null);setAssistNote(null);setStep('analyze');
-      void handleStartAnalysis(anchor);
-    }
+    const next=[...assistPoints.filter(p=>p.frame!==frame),{frame,xNorm:x,yNorm:y}].sort((p,q)=>p.frame-q.frame);
+    const noBall=assistNoBall.filter(f=>f!==frame);
+    setAssistPoints(next);setAssistNoBall(noBall);
+    if(next.length>=ASSIST_MAX)finishAssist(next,noBall);
+  };
+  const assistNoBallHere=()=>{
+    const frame=currentVideoFrame;
+    setAssistPoints(p=>p.filter(q=>q.frame!==frame));setAssistNoBall(n=>[...new Set([...n,frame])]);
+    seekTo(Math.min(totalVideoFrames-1,frame+1)); // this frame has no visible ball: move on
   };
   const skipAssist=()=>{if(pendingOutcome.current)commitOutcome(pendingOutcome.current,events);else setStep('result');};
 
@@ -326,9 +341,13 @@ export default function App() {
   // Detected-ball overlay for the video page (display only; shown only for an up-to-date analysis)
   const overlay=useMemo(()=>{
     if(!hasAnalyzed||!completedResult)return null;
+    if(ballTrack&&ballTrack.engine==='new'){
+      const pt=(p:BallTrackSummary['points'][number])=>({frame:p.frame,timestamp:p.timeSec,x_norm:p.xNorm,y_norm:p.yNorm});
+      return {observed:ballTrack.points.filter(p=>p.source!=='estimated').map(pt),estimated:ballTrack.points.filter(p=>p.source==='estimated').map(pt)};
+    }
     const pick=(p:{frame:number;timestamp:number;x_norm:number;y_norm:number}):OverlayPoint=>({frame:p.frame,timestamp:p.timestamp,x_norm:p.x_norm,y_norm:p.y_norm});
     return {observed:detections.map(pick),estimated:(completedResult.video_track??[]).filter(p=>p.source!=='vision').map(pick)};
-  },[hasAnalyzed,completedResult,detections]);
+  },[hasAnalyzed,completedResult,detections,ballTrack]);
 
   const handleResetToAiFrames=()=>{
     if(aiDetection&&aiDetection.releaseFrame>0&&aiDetection.gloveFrame>aiDetection.releaseFrame){
@@ -365,10 +384,43 @@ export default function App() {
     <button type="button" role="tab" id="view-tab-video" aria-selected={viewTab==='video'} onClick={()=>setViewTab('video')} className={`mode-toggle ${viewTab==='video'?'mode-active':''}`}>影片</button>
     <button type="button" role="tab" id="view-tab-twod" aria-selected={viewTab==='twod'} onClick={()=>{videoElementRef.current?.pause();setViewTab('twod');}} className={`mode-toggle ${viewTab==='twod'?'mode-active':''}`}>2D 動畫</button>
   </div>;
+  // What the program saw in the video, in plain words (used above the result and in the 2D view).
+  const foundText=!ballTrack?null
+    :ballTrack.status==='no_ball_found'?'影片中沒有找到球，以下為模型推算'
+    :ballTrack.status==='camera_motion_too_large'?'畫面晃動太大，沒有硬找球；請用腳架或固定手機後重拍。以下為模型推算'
+    :ballTrack.status==='insufficient_frames'?'影格不足，無法找球（出手與進手套請標在影片中間，前後留一些畫面）。以下為模型推算'
+    :`影片中找到 ${ballTrack.observedCount} 個球點${ballTrack.estimatedCount?`（另有 ${ballTrack.estimatedCount} 格被遮住或看不清，只有推估）`:''}`;
   const twoD=<div className="space-y-2">
     {!matchedResult&&<p className="text-xs text-amber-200 card">還沒有分析結果：完成分析後，這裡會播放勝出候選的 2D 投球動畫。</p>}
+    {matchedResult&&<div id="twod-legend" className="card text-xs space-y-1">
+      <p id="twod-found" className="font-bold text-cyan-200">{foundText??'影片中沒有取得球點資料，以下為模型推算'}</p>
+      <p><span className="inline-block w-3 h-1 align-middle bg-emerald-400 mr-1"/>綠線＝模型推算的球路（資料庫候選的物理模擬，不是影片中的球）</p>
+      <p><span className="inline-block w-2.5 h-2.5 align-middle rounded-full bg-cyan-400 mr-1"/>青點＝影片中找到的球點（右下方 2D 對照圖）</p>
+    </div>}
     <PitchVisualizer result={matchedResult} active={showTwoD}/>
   </div>;
+
+  const labelStats={confirmed:labels.filter(l=>l.status==='confirmed').length,corrected:labels.filter(l=>l.status==='corrected').length,noBall:labels.filter(l=>l.status==='no_ball').length};
+  const curLabel=labels.find(l=>l.frame===currentVideoFrame)??null;
+  const curProgram=ballTrack?.points.find(p=>p.frame===currentVideoFrame)??null;
+  const programRef=curProgram?{xNorm:curProgram.xNorm,yNorm:curProgram.yNorm,source:curProgram.source}:null;
+  const setLabel=(l:Omit<BallLabel,'savedAt'|'program'>)=>updateLabels(items=>upsertLabel(items,{...l,program:programRef,savedAt:new Date().toISOString()}));
+  const confirmUsable=step==='result'&&confirmMode&&viewTab==='video'&&currentViewKind!=='interpolated';
+  const confirmProp=confirmUsable?{
+    program:programRef,label:curLabel?{xNorm:curLabel.xNorm??0,yNorm:curLabel.yNorm??0,kind:curLabel.status}:null,
+    onConfirm:()=>{const base=curLabel&&curLabel.status!=='no_ball'?curLabel:programRef;if(!base)return;setLabel({frame:currentVideoFrame,xNorm:base.xNorm,yNorm:base.yNorm,status:curLabel?.status==='corrected'?'corrected':'confirmed'});},
+    onNoBall:()=>setLabel({frame:currentVideoFrame,status:'no_ball'}),
+    onMove:(x:number,y:number)=>{setLabel({frame:currentVideoFrame,xNorm:x,yNorm:y,status:'corrected'});},
+    onClear:()=>updateLabels(items=>removeLabel(items,currentVideoFrame))
+  }:null;
+  const exportLabels=()=>{
+    if(!videoTiming||!labels.length)return;
+    const times=videoTiming.timestamps;
+    downloadLabelExport(buildLabelExport({fileName:videoFileName,width:videoTiming.width,height:videoTiming.height,fps:videoFps,frames:totalVideoFrames,durationSec:videoTiming.durationSec,timeBase:videoTiming.timeBase},
+      {releaseFrame:events.release?.left??null,gloveFrame:events.glove?.left??null,releaseTimeSec:events.release?.timeSec??null,gloveTimeSec:events.glove?.timeSec??null},labels,times,APP_VERSION),
+      `${videoFileName.replace(/\.[^.]+$/,'')||'video'}.ball-labels.json`);
+  };
+  const reanalyzeWithLabels=()=>{setConfirmMode(false);setStep('analyze');void handleStartAnalysis();};
 
   return (
     <div className="app-shell min-h-dvh bg-slate-950 text-slate-100 font-sans">
@@ -447,17 +499,17 @@ export default function App() {
               // Rebase the parsed container times onto the browser's own media timeline (once, before any marking).
               setVideoTiming(prev=>prev&&prev.timeBase==='timestamp'?{...prev,timestamps:prev.timestamps.map(t=>Math.max(0,t+offset)),timingWarning:`${prev.timingWarning??''} 起點已依瀏覽器實際呈現時間校正 ${offset.toFixed(4)} 秒。`.trim()}:prev);
             }}
-            isSelectingPoint={assistStage}
-            onSelectCoordinate={(x,y)=>{if(currentViewKind==='interpolated')return;if(assistStage)handleAssistTap(x,y);}}
-            manualPoint1={step==='assist'?manualAnchor?.point1||null:null}
-            manualPoint2={null}
+            isSelectingPoint={step==='assist'?1:null}
+            onSelectCoordinate={(x,y)=>{if(currentViewKind==='interpolated')return;if(step==='assist')handleAssistTap(x,y);}}
+            markers={step==='assist'?assistPoints.filter(p=>p.frame===currentVideoFrame).map(p=>({xNorm:p.xNorm,yNorm:p.yNorm,kind:'tap' as const})):[]}
+            confirm={confirmProp}
             overlay={overlay}
             twoD={twoD}
             showTwoD={showTwoD}
             viewToggle={step==='mark'?viewToggle:undefined}
             onBack={step==='mark'?()=>go('video'):undefined}
             onNext={step==='mark'?()=>go('analyze'):undefined}
-            assist={step==='assist'?{text:assistStage===2?'請在這一格再點一下球':'找不到球。請在這一格點一下球',onSkip:skipAssist}:null}
+            assist={step==='assist'?{text:'找不到球。請找球已離手、沒有被擋住的畫面，點一下球（−1／+1 可前後移動）',count:assistPoints.length,min:ASSIST_MIN,max:ASSIST_MAX,onSkip:skipAssist,onNoBall:assistNoBallHere,onDone:()=>finishAssist()}:null}
             menuExtra={step==='mark'?<>
               {isVideoLoaded&&<AutoDetectPanel
                 canRun={Boolean(videoTiming?.timingReliable)} busy={busy} running={isAutoDetectingFrames} progress={autoDetectProgress} stageText={autoDetectStageText}
@@ -466,7 +518,6 @@ export default function App() {
               <button type="button" id="btn-science-info-menu" onClick={()=>setScienceOpen(true)} className="btn-secondary"><FlaskConical size={18}/>科學資訊</button>
             </>:undefined}
           />
-          {step==='assist'&&assistNote&&<p id="assist-note" role="status" className="assist-note">{assistNote}</p>}
           {step==='mark'&&<p className="sr-only">逐格移動到球離手那一格按「標記出手」，到球進手套那一格按「標記進手套」。</p>}
         </section>}
 
@@ -497,6 +548,23 @@ export default function App() {
         {/* ── Step 4：結果 ───────────────────────────── */}
         {step==='result'&&matchedResult&&<section id="result-screen" aria-labelledby="h-result" className="space-y-4">
           <h2 id="h-result" className="screen-title">4. 分析結果</h2>
+          {foundText&&<div id="ball-track-summary" role="status" className={`card text-sm ${ballTrack?.status==='tracked'?'border-cyan-500/40 text-cyan-100':'border-amber-500/40 text-amber-100'}`} data-status={ballTrack?.status} data-observed={ballTrack?.observedCount??0}>
+            <p className="font-bold">{foundText}</p>
+            {ballTrack&&ballTrack.engine==='new'&&<p className="text-[11px] text-slate-400 mt-1">{ballTrack.status==='tracked'?'推估點只由前後內插，不是影像證據，也不會用來算結果。':''}{ballTrack.tripodAdvised?' 畫面有明顯晃動，建議用腳架。':''} 處理 {(ballTrack.ms/1000).toFixed(1)} 秒{ballTrack.work?`，工作解析度 ${ballTrack.work}`:''}。</p>}
+            {ballTrack&&ballTrack.engine==='old'&&<p className="text-[11px] text-slate-400 mt-1">{ballTrack.message}</p>}
+          </div>}
+          <div id="confirm-panel" className="card space-y-2">
+            <h3 className="card-title">確認球點（選用）</h3>
+            <p className="text-xs text-slate-400">在影片上逐格確認程式找到的球點：按「正確」、拖曳修正位置，或標「這格沒有球」。標記只存在這台裝置的瀏覽器，不會上傳；已確認的點會在重新分析時當作錨點。</p>
+            <button type="button" id="btn-confirm-mode" aria-pressed={confirmMode} onClick={()=>{setConfirmMode(m=>!m);setViewTab('video');}} className={`btn-secondary ${confirmMode?'!border-cyan-400 !text-cyan-200':''}`}>{confirmMode?'結束確認':'開始確認球點'}</button>
+            {confirmMode&&currentViewKind==='interpolated'&&<p role="status" className="text-xs text-amber-200">目前是補幀的推算畫面，不能標記球點；請到影片的「更多功能」切回原始影格。</p>}
+            <p id="label-summary" className="text-xs text-slate-300">已標 {labels.length} 格（確認 {labelStats.confirmed}／修正 {labelStats.corrected}／沒有球 {labelStats.noBall}）</p>
+            <div className="grid grid-cols-2 gap-2">
+              <button type="button" id="btn-export-labels" disabled={!labels.length} onClick={exportLabels} className="btn-secondary"><Download size={16}/>匯出標記資料</button>
+              <button type="button" id="btn-reanalyze-labels" disabled={!labels.length||busy} onClick={reanalyzeWithLabels} className="btn-secondary">用標記重新分析</button>
+            </div>
+            <button type="button" id="btn-clear-labels" disabled={!labels.length} onClick={()=>updateLabels(()=>[])} className="link-btn !text-slate-400">清除這支影片的全部標記</button>
+          </div>
           <ResultCards result={matchedResult} averageVelocityKmh={completedVelocity?.velocityKmh??matchedResult.velocity_kmh} flightSeconds={completedVelocity?.flightSeconds??matchedResult.flight_time_sec} distanceM={analysisDistance}/>
           {analyzedEvents&&<p id="event-time-provenance" data-engine-flight-seconds={matchedResult.flight_time_sec} data-events={JSON.stringify(analyzedEvents)} className="text-xs text-amber-200 card">出手 {analyzedEvents.release?.timeSec.toFixed(6)}s（{analyzedEvents.release?.kind==='interpolated'?'推算':!sourceTimesValid?'媒體時間':analyzedEvents.release?.kind==='cfr_assumed'?'CFR假設':'原始'}）→進手套 {analyzedEvents.glove?.timeSec.toFixed(6)}s（{analyzedEvents.glove?.kind==='interpolated'?'推算':!sourceTimesValid?'媒體時間':analyzedEvents.glove?.kind==='cfr_assumed'?'CFR假設':'原始'}）。事件精度仍受原始間距 {(sourceTimesValid?Math.max(analyzedEvents.release?.sourceSpanSec||0,analyzedEvents.glove?.sourceSpanSec||0).toFixed(4):'未知')}s 與遮蔽限制；補幀不增加真觀測或旋轉量測精度。</p>}
           <details id="full-metrics" className="card"><summary className="card-title">完整數據與反查依據</summary>
