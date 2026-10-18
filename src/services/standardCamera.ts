@@ -27,7 +27,12 @@ export function standardCameras(mode:CameraViewMode,width:number,height:number,d
  if(rear){const roll=preferred?.rollDeg??0;return [...cameras,...cameras.map(g=>cameraFromPose([-g.positionM![0],g.positionM![1],g.positionM![2]],-g.yawDeg!,g.pitchDeg!,2*roll-g.rollDeg,g.focalPx!,width,height))];}
  return cameras;
 }
+// Cameras estimated from the ball path (pitchGeometryFit) are used as given by the matcher; identity is tracked here because the
+// protected CameraGeometry type has no field for it.
+const ESTIMATED_CAMERAS=new WeakSet<object>();
+export function markEstimatedCamera(g:CameraGeometry):CameraGeometry{ESTIMATED_CAMERAS.add(g);return g;}
 export function validManualCamera(g:CameraGeometry|undefined):boolean {
+ if(g&&ESTIMATED_CAMERAS.has(g)&&g.width>0&&g.height>0&&Number.isFinite(g.focalPx)&&g.focalPx!>0&&g.rotation?.length===3&&g.translation?.length===3)return true;
  return Boolean(g?.method==='planar_reference'&&g.width>0&&g.height>0&&Number.isFinite(g.focalPx)&&g.focalPx!>0&&g.rotation?.length===3&&g.rotation.every(r=>r.length===3&&r.every(Number.isFinite))&&g.translation?.length===3&&g.translation.every(Number.isFinite));
 }
 export function projectCandidate(r:PitchRecord,g:CameraGeometry){

@@ -25,7 +25,7 @@
 {
   "schema": "pitchvision.ball-labels",
   "version": 1,
-  "app": "5.0.2",
+  "app": "5.0.3",
   "createdAt": "2026-10-18T12:00:00.000Z",
   "video": {
     "fileName": "直球.mov",

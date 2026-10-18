@@ -2,6 +2,9 @@
 import {createVideoFrameSource,measureTimeBaseOffset,FrameSource,FrameImage} from '../../src/services/pitchBallFrameSource';
 import {trackPitchBall} from '../../src/services/pitchBallTracker';
 import {trackBaseballSparse} from '../../src/baseballTracker';
+import {runPitchAnalysis} from '../../src/analysisRuntime';
+import {describePosition,selectEvent,eventAnalysisView} from '../../src/services/analysisTimeline';
+import {computePitcherBiometrics} from '../../src/spatialCalibration';
 // @ts-ignore plain JS renderer shared with the Node tests
 import {makeScene} from './synth.mjs';
 
@@ -88,4 +91,21 @@ async function compareCapture(first:number,last:number){
   }
   return {requested:last-first+1,sequentialGot:seq.length,frames:out};
 }
-window.__pv={compareCapture,runNew,runOld,synthEncode,open,frame:async(i:number)=>{const f=await frame(i);return {width:f.width,height:f.height,verified:f.verified,time:f.time};},sheet,getFrame:frame,get times(){return times;},get source(){return source;}};
+/** The real app analysis path (runPitchAnalysis) on the opened clip with the owner's event marks. */
+async function runApp(p:{release:number;glove:number;view:'catcher'|'pitcher_rear';heightCm?:number;hasMound?:boolean;userPoints?:any[];input?:any}){
+  if(!source)throw Error('not open');
+  const v=document.createElement('video');v.muted=true;v.playsInline=true;v.src='/video';
+  await new Promise<void>((ok,fail)=>{v.onloadeddata=()=>ok();v.onerror=()=>fail(Error('video error'));});
+  const n=times.length,fps=(n-1)/(times[n-1]-times[0]),duration=Math.max(v.duration||0,times[n-1]);
+  const timing:any={actualFps:fps,fpsSource:'container_timestamps',totalFrames:n,durationSec:duration,isVFR:false,timeBase:'timestamp',timestamps:times,width:v.videoWidth,height:v.videoHeight};
+  const ev=(i:number)=>selectEvent(describePosition(times,times[i]),times);
+  const events={release:ev(p.release),glove:ev(p.glove)};
+  const eventView=eventAnalysisView(times,events,duration);
+  const biometrics=computePitcherBiometrics(p.hasMound??true,p.heightCm??178);
+  const geometry:any[]=[];let track:any=null;
+  const t0=performance.now();
+  const out:any=await runPitchAnalysis({videoElement:v,events,eventView:eventView as any,videoTiming:timing,videoFps:fps,totalVideoFrames:n,sourceTimesValid:true,analysisHasSourceFrames:true,analysisFps:fps,analysisDistance:biometrics.effectiveTravelDistanceM,releaseFrame:eventView.releaseFrame,gloveFrame:eventView.gloveFrame,visibleEndFrame:p.glove,originalFlightFrames:p.glove-p.release+1,selectedPitchType:'🤖 AI 全數據庫自動辨識',cameraViewMode:p.view,biometrics,strictPitchTypeMode:true,allowCrossTypeFallback:false,manualAnchor:null,cameraGeometry:null,useExistingTracking:true,hasAiDetection:false,isCancelled:()=>false,userPoints:p.userPoints,...(p.input||{})},{onProgress:()=>{},onVisibleEndFrame:()=>{},onCameraGeometry:g=>geometry.push(g),onTrack:(t,m)=>{track={t,m};},onConfidence:()=>{},onAiDetection:()=>{}});
+  v.remove();
+  return {ms:performance.now()-t0,fps,width:timing.width,height:timing.height,times,geometry:geometry.at(-1)??null,outcome:out,track};
+}
+window.__pv={runApp,compareCapture,runNew,runOld,synthEncode,open,frame:async(i:number)=>{const f=await frame(i);return {width:f.width,height:f.height,verified:f.verified,time:f.time};},sheet,getFrame:frame,get times(){return times;},get source(){return source;}};

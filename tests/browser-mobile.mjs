@@ -167,6 +167,13 @@ try{
   await openMenu();await page.locator('#view-tab-twod').click();await page.locator('#twod-view').waitFor();
   ok('2D view available from the video page before analysis (with a notice)',/還沒有分析結果/.test(await page.locator('#twod-view').innerText()));
   await shot('14-mark-2d-before-analysis');
+  // #10: the 2D view always shows a 回到影片 button (not only inside the menu) and it works
+  {const b=page.locator('#btn-twod-back'),box=await b.boundingBox();
+   ok('2D view shows a visible 回到影片 button without opening the menu',await b.isVisible()&&/回到影片/.test(await b.innerText())&&await page.locator('#player-menu').count()===0);
+   ok('the 回到影片 button is a full-size touch target',box.height>=44&&box.width>=44);
+   await b.click();await page.locator('#twod-view').waitFor({state:'detached'});
+   ok('the 回到影片 button returns to the video',await page.locator('#twod-view').count()===0&&await page.locator('#set-release-time').isVisible());
+   await openMenu();await page.locator('#view-tab-twod').click();await page.locator('#twod-view').waitFor();}
   ok('choosing a view closes the menu',await page.locator('#player-menu').count()===0);
   await openMenu();await page.locator('#view-tab-video').click();
   await openMenu();await page.locator('#mode-source').click();await closeMenu();await waitSeek();
@@ -188,7 +195,21 @@ try{
   ok('at least 4 ball points found on the synthetic pitch',Number(await page.locator('#ball-track-summary').getAttribute('data-observed'))>=4);
 
   // ── 4. 結果：影片上的球點、影片／2D 切換 ─────────────────────
-  report.resultCards=await page.locator('#result-cards').innerText();
+  report.resultCards=await page.locator('#full-data').innerText();
+  // #9: 完整數據 on top; 資料庫匹配數據 is a collapsed block below it
+  {const order=await page.evaluate(()=>{const a=document.querySelector('#full-data'),b=document.querySelector('#db-match-data');return {fullFirst:Boolean(a&&b&&(a.compareDocumentPosition(b)&Node.DOCUMENT_POSITION_FOLLOWING)),collapsed:b?!b.open:null,dbCardsHidden:!document.querySelector('#db-match-data #result-cards')?.checkVisibility?.()};});
+   ok('完整數據 comes before 資料庫匹配數據',order.fullFirst);
+   ok('資料庫匹配數據 is collapsed by default',order.collapsed===true&&order.dbCardsHidden);
+   const g=await page.locator('#geometry-cards').getAttribute('data-status');report.geometryStatus=g;
+   ok('geometry cards state their status (ok / low confidence / fallback)',['ok','low_confidence','fallback'].includes(g));
+   const cards=await page.evaluate(()=>[...document.querySelectorAll('#geometry-cards .metric-card')].map(c=>({id:c.id,estimated:c.dataset.estimated,text:c.innerText})));report.geometryCards=cards.map(c=>c.id);
+   const key=cards.filter(c=>/geo-(speedAvg|speedRelease|distance)/.test(c.id));
+   ok('speed and distance cards carry an origin tag and the estimated flag',key.length>=3&&key.every(c=>c.estimated==='1'&&/影像量測|物理模型推算|資料庫先驗/.test(c.text)));
+   ok('speed and distance cards show a range',key.every(c=>/不確定範圍/.test(c.text)));
+   const top3=await page.locator('#pitch-type-top3 li').count();report.pitchTop3=top3;
+   ok('pitch types are listed with relative likelihood (top 3), or the page says there is no likelihood',g==='fallback'?top3<=3:(top3===3&&/%/.test(await page.locator('#pitch-type-top3').innerText())));
+   if(g==='fallback')ok('fallback says 相機為推測',/相機為推測/.test(await page.locator('#geometry-fallback').innerText()));
+   await page.locator('#db-match-data > summary').click();ok('opening 資料庫匹配數據 shows the database cards',await page.locator('#result-cards').isVisible());await page.locator('#db-match-data > summary').click();}
   report.provenance=await page.locator('#event-time-provenance').getAttribute('data-engine-flight-seconds');
   ok('engine received exact marked flight time',Math.abs(Number(report.provenance)-0.5)<1e-9);
   await page.locator('#ball-overlay').waitFor();
@@ -213,8 +234,9 @@ try{
   ok('2D view separates model path from points found in the video',/影片中找到 \d+ 個球點/.test(await page.locator('#twod-found').innerText())&&/模型推算的球路/.test(await page.locator('#twod-legend').innerText())&&/影片中找到的球點/.test(await page.locator('#twod-legend').innerText()));
   await page.locator('#btn-toggle-play').click();await page.waitForTimeout(1200);
   await checkLayout('06-result-2d');await shot('31-result-2d-animation');
-  await page.locator('#view-tab-video').click();
-  await page.locator('#result-cards').scrollIntoViewIfNeeded();await shot('32-result-cards',true);
+  ok('the result page 2D view also shows 回到影片',await page.locator('#btn-twod-back').isVisible());
+  await page.locator('#btn-twod-back').click();ok('回到影片 switches the result page back to the video',await page.locator('#view-tab-video').getAttribute('aria-selected')==='true'&&await page.locator('#twod-view').count()===0);
+  await page.locator('#full-data').scrollIntoViewIfNeeded();await shot('32-result-cards',true);
   // ── 4b. 確認球點：正確／拖曳修正／這格沒有球、匯出、重新分析
   const stage0=async()=>page.locator('.player-stage').boundingBox();
   await page.locator('#btn-confirm-mode').click();ok('confirm mode on',await page.locator('#btn-confirm-mode').getAttribute('aria-pressed')==='true');
@@ -322,19 +344,19 @@ try{
   await shot('51-assist-two-taps');
   await page.locator('#assist-done').click();
   await page.locator('#result-screen').waitFor({timeout:120000});
-  ok('result appears after "done", with no second prompt',await page.locator('#result-cards').isVisible()&&await page.locator('#assist-banner').count()===0);
+  ok('result appears after "done", with no second prompt',await page.locator('#full-data').isVisible()&&await page.locator('#assist-banner').count()===0);
   ok('the video view says what was found',await page.locator('#ball-track-summary').count()===1);
   await shot('52-result-after-assist');
   // skip path
   await prepNoBall();
   await page.locator('#assist-skip').waitFor({timeout:120000});await page.locator('#assist-skip').click();
-  await page.locator('#result-screen').waitFor();ok('skipping goes straight to the result',await page.locator('#result-cards').isVisible());
+  await page.locator('#result-screen').waitFor();ok('skipping goes straight to the result',await page.locator('#full-data').isVisible());
   ok('no ball found is stated in words',/影片中沒有找到球/.test(await page.locator('#ball-track-summary').innerText())||await page.locator('#ball-track-summary').getAttribute('data-status')==='tracked');
   // five taps start the analysis by themselves
   await prepNoBall();
   await page.locator('#assist-banner').waitFor({timeout:120000});await waitSeek();
   for(let i=0;i<5;i++){await tapStage(.5+i*.01,.55+i*.02);if(i<4){await page.locator('#step-forward').click();await waitSeek();}}
-  await page.locator('#result-screen').waitFor({timeout:120000});ok('the fifth tap finishes the prompt and analyses',await page.locator('#result-cards').isVisible());
+  await page.locator('#result-screen').waitFor({timeout:120000});ok('the fifth tap finishes the prompt and analyses',await page.locator('#full-data').isVisible());
 
   // ── 6b. 4K 尺寸（2160×3840）影片：90 FPS 補幀可切換並完成標記，畫面標示「預覽已縮小」
   await page.goto(base,{waitUntil:'networkidle'});

@@ -27,6 +27,10 @@ import {FpsDialog} from './components/FpsDialog';
 import type {BallAnchor} from './services/pitchBallTracker';
 import type {BallTrackSummary} from './analysisRuntime';
 import {BallLabel,labelsKey,loadLabels,saveLabels,upsertLabel,removeLabel,labelsToAnchors,labelsToNoBall,buildLabelExport,downloadLabelExport} from './services/ballLabels';
+import {GeometryCards} from './components/GeometryCards';
+import {distancePrior} from './services/distancePrior';
+import {readCameraMetadata,CameraMetadata} from './services/cameraMetadata';
+import type {PitchEstimates} from './services/pitchEstimates';
 import {UploadCloud,Loader2,AlertTriangle,CheckCircle,Info,ChevronRight,RotateCcw,FlaskConical,Download} from 'lucide-react';
 
 type Step=NavStep|'assist';
@@ -36,6 +40,7 @@ const APP_VERSION=typeof __APP_VERSION__==='string'?__APP_VERSION__:'dev';
 export default function App() {
   const [step,setStep]=useState<Step>('video');
   const [biometrics,setBiometrics]=useState<PitcherBiometrics>(DEFAULT_PITCHER_BIOMETRICS);
+  const [distanceOverrideM,setDistanceOverrideM]=useState<number|null>(null);
 
   // Video and frame states
   const [totalVideoFrames,setTotalVideoFrames]=useState<number>(0);
@@ -62,7 +67,7 @@ export default function App() {
   const [targetFrameSeek,setTargetFrameSeek]=useState<number|null>(null);
   const [scienceOpen,setScienceOpen]=useState(false);
   const [cameraGeometry,setCameraGeometry]=useState<CameraGeometry|null>(null);
-  const analysisDistance=cameraGeometry?.method==='planar_reference'?cameraGeometry.referenceLengthM!:biometrics.effectiveTravelDistanceM;
+  const analysisDistance=cameraGeometry?.method==='planar_reference'?cameraGeometry.referenceLengthM!:(distanceOverrideM??distancePrior(biometrics).priorM);
   const setEvent=(name:'release'|'glove',event:SelectedEvent)=>{setEvents(prev=>({...prev,[name]:event}));setHasAnalyzed(false);if(name==='glove')setVisibleEndFrame(event.right);};
   // Preview-only positions are not source PTS or measured frames. Quantitative
   // analysis still requires the unchanged source timing validation.
@@ -117,6 +122,9 @@ export default function App() {
   const [assistNoBall,setAssistNoBall]=useState<number[]>([]);
   const pendingOutcome=useRef<AnalysisOutcomeDone|null>(null);
   const [ballTrack,setBallTrack]=useState<BallTrackSummary|null>(null);
+  const [estimates,setEstimates]=useState<PitchEstimates|null>(null);
+  const [outcomeDistance,setOutcomeDistance]=useState<number|null>(null);
+  const [cameraMeta,setCameraMeta]=useState<CameraMetadata|null>(null);
   // Ball-point labels (confirm / correct / "no ball"): kept in this browser per video, exportable as JSON.
   const [confirmMode,setConfirmMode]=useState(false);
   const [labelBox,setLabelBox]=useState<{key:string|null;items:BallLabel[]}>({key:null,items:[]});
@@ -161,7 +169,7 @@ export default function App() {
     setVideoFps(NaN);setTotalVideoFrames(0);setVideoFileName('');setCurrentVideoFrame(0);setTargetFrameSeek(null);setVisibleEndFrame(0);
     setEvents({release:null,glove:null});setAnalyzedEvents(null);setCompletedResult(null);setCompletedVelocity(null);setDetections([]);setCurrentViewKind('original');setUserVideoUrl(null);setVideoTiming(null);setCameraGeometry(null);
     setHasAnalyzed(false);setAiDetection(null);setAutoDetectResult(null);setVideoTrack([]);setVideoMetrics(null);setConfidenceScores(null);
-    setAssistPoints([]);setAssistNoBall([]);setBallTrack(null);setConfirmMode(false);pendingOutcome.current=null;setFpsDialogOpen(false);setFpsError(null);
+    setAssistPoints([]);setAssistNoBall([]);setBallTrack(null);setEstimates(null);setOutcomeDistance(null);setCameraMeta(null);setConfirmMode(false);pendingOutcome.current=null;setFpsDialogOpen(false);setFpsError(null);
   };
 
   // 統一 Video Loading Controller：同一支檔案重選也能觸發
@@ -175,6 +183,7 @@ export default function App() {
     resetForNewVideo();
     try{
       const loadResult=await VideoLoadService.loadVideoFile(file,(status)=>{if(loadId===videoLoadGeneration.current)setVideoLoadStatus(status);});
+      void readCameraMetadata(file).then(meta=>{if(loadId===videoLoadGeneration.current)setCameraMeta(meta);});
       if(loadId!==videoLoadGeneration.current){VideoLoadService.revokePreviousObjectUrl(loadResult.objectUrl);return;}
       activeObjectUrlRef.current=loadResult.objectUrl;
       setVideoFileName(loadResult.fileName);
@@ -257,7 +266,7 @@ export default function App() {
 
   const commitOutcome=(outcome:AnalysisOutcomeDone,ranEvents:SelectedEvents)=>{
     setCompletedResult(outcome.result);setCompletedVelocity({velocityKmh:outcome.velocityKmh,flightSeconds:outcome.flightSeconds,flightFrames:outcome.flightFrames});
-    setDetections(outcome.detections);setAnalyzedEvents(ranEvents);setBallTrack(outcome.ballTrack);
+    setDetections(outcome.detections);setAnalyzedEvents(ranEvents);setBallTrack(outcome.ballTrack);setEstimates(outcome.estimates);setOutcomeDistance(outcome.distanceM);
     setAnalysisProgress(100);setHasAnalyzed(true);setAssistPoints([]);setAssistNoBall([]);pendingOutcome.current=null;
     setStep('result');
   };
@@ -293,7 +302,7 @@ export default function App() {
         videoElement:videoElementRef.current,events,eventView:eventView!,videoTiming,videoFps,totalVideoFrames,
         sourceTimesValid,analysisHasSourceFrames,analysisFps,analysisDistance,releaseFrame,gloveFrame,visibleEndFrame,originalFlightFrames,
         selectedPitchType,cameraViewMode,biometrics,strictPitchTypeMode,allowCrossTypeFallback,manualAnchor:anchor,cameraGeometry,useExistingTracking,
-        hasAiDetection:Boolean(aiDetection),autoDetectConfidence:autoDetectResult?.confidence,isCancelled,userPoints,noBallFrames
+        hasAiDetection:Boolean(aiDetection),autoDetectConfidence:autoDetectResult?.confidence,isCancelled,userPoints,noBallFrames,cameraMeta,distanceOverrideM
       },{
         onProgress:(pct,text)=>{if(isCancelled())return;setAnalysisProgress(pct);setAnalysisStepText(text);},
         onVisibleEndFrame:setVisibleEndFrame,
@@ -507,7 +516,7 @@ export default function App() {
             twoD={twoD}
             showTwoD={showTwoD}
             viewToggle={step==='mark'?viewToggle:undefined}
-            onBack={step==='mark'?()=>go('video'):undefined}
+            onShowVideo={()=>setViewTab('video')} onBack={step==='mark'?()=>go('video'):undefined}
             onNext={step==='mark'?()=>go('analyze'):undefined}
             assist={step==='assist'?{text:'找不到球。請找球已離手、沒有被擋住的畫面，點一下球（−1／+1 可前後移動）',count:assistPoints.length,min:ASSIST_MIN,max:ASSIST_MAX,onSkip:skipAssist,onNoBall:assistNoBallHere,onDone:()=>finishAssist()}:null}
             menuExtra={step==='mark'?<>
@@ -528,9 +537,9 @@ export default function App() {
             <p>出手 <b className="font-mono">{events.release?.timeSec.toFixed(4)}s</b> → 進手套 <b className="font-mono">{events.glove?.timeSec.toFixed(4)}s</b></p>
             <p>飛行時間 <b className="font-mono text-cyan-200">{flightSecondsPreview!==null&&flightSecondsPreview>0?flightSecondsPreview.toFixed(4):'—'} 秒</b>{originalFlightFrames!==null&&<span className="text-slate-400">（區間內原始影格 {originalFlightFrames} 張）</span>}</p>
             <p>視角 <b>{cameraViewMode==='catcher'?'捕手方向':'投手方向'}</b> · 球種 <b>{selectedPitchType}</b></p>
-            <p>使用距離 <b className="font-mono">{analysisDistance} m</b><span className="text-slate-400 text-xs">（{cameraGeometry?.method==='planar_reference'?'地面矩形標定':'由身高／跨步／投手丘推導'}）</span></p>
+            <p>使用距離 <b className="font-mono">{analysisDistance} m</b><span className="text-slate-400 text-xs">（{cameraGeometry?.method==='planar_reference'?'地面矩形標定':distanceOverrideM!==null?'你輸入的距離':'先驗：板距 − 出手延伸，沒有捕手；分析後會附範圍'}）</span></p>
           </div>
-          <PitcherSetupCard biometrics={biometrics} onChange={setBiometrics} recomputeBiometrics={computePitcherBiometrics}/>
+          <PitcherSetupCard biometrics={biometrics} onChange={setBiometrics} recomputeBiometrics={computePitcherBiometrics} distanceOverrideM={distanceOverrideM} onDistanceOverride={v=>{setDistanceOverrideM(v);setHasAnalyzed(false);}}/>
           <div className="card space-y-1">
             <h3 className="card-title">比對選項</h3>
             <label className="check"><input type="checkbox" checked={strictPitchTypeMode} disabled={busy} onChange={e=>setStrictPitchTypeMode(e.target.checked)}/>嚴格限定同球種反查 RPM／轉軸</label>
@@ -565,10 +574,20 @@ export default function App() {
             </div>
             <button type="button" id="btn-clear-labels" disabled={!labels.length} onClick={()=>updateLabels(()=>[])} className="link-btn !text-slate-400">清除這支影片的全部標記</button>
           </div>
-          <ResultCards result={matchedResult} averageVelocityKmh={completedVelocity?.velocityKmh??matchedResult.velocity_kmh} flightSeconds={completedVelocity?.flightSeconds??matchedResult.flight_time_sec} distanceM={analysisDistance}/>
+          <section id="full-data" className="space-y-3">
+            <h3 className="card-title">完整數據</h3>
+            {estimates?<GeometryCards estimates={estimates} result={matchedResult}/>:<ResultCards result={matchedResult} averageVelocityKmh={completedVelocity?.velocityKmh??matchedResult.velocity_kmh} flightSeconds={completedVelocity?.flightSeconds??matchedResult.flight_time_sec} distanceM={outcomeDistance??analysisDistance}/>}
+          </section>
           {analyzedEvents&&<p id="event-time-provenance" data-engine-flight-seconds={matchedResult.flight_time_sec} data-events={JSON.stringify(analyzedEvents)} className="text-xs text-amber-200 card">出手 {analyzedEvents.release?.timeSec.toFixed(6)}s（{analyzedEvents.release?.kind==='interpolated'?'推算':!sourceTimesValid?'媒體時間':analyzedEvents.release?.kind==='cfr_assumed'?'CFR假設':'原始'}）→進手套 {analyzedEvents.glove?.timeSec.toFixed(6)}s（{analyzedEvents.glove?.kind==='interpolated'?'推算':!sourceTimesValid?'媒體時間':analyzedEvents.glove?.kind==='cfr_assumed'?'CFR假設':'原始'}）。事件精度仍受原始間距 {(sourceTimesValid?Math.max(analyzedEvents.release?.sourceSpanSec||0,analyzedEvents.glove?.sourceSpanSec||0).toFixed(4):'未知')}s 與遮蔽限制；補幀不增加真觀測或旋轉量測精度。</p>}
-          <details id="full-metrics" className="card"><summary className="card-title">完整數據與反查依據</summary>
-            <div className="mt-3"><MetricsPanel compact result={matchedResult} matchedResult={matchedResult} calcVelocity={completedVelocity?.velocityKmh} flightSeconds={completedVelocity?.flightSeconds} flightFrames={completedVelocity?.flightFrames} standardDistance={STANDARD_GLOVE_DISTANCE_METERS}/></div>
+          <details id="db-match-data" className="card">
+            <summary className="card-title">資料庫匹配數據（預設收合）</summary>
+            <div className="mt-3 space-y-3">
+              <p className="text-xs text-slate-400">以下是舊版引擎比對資料庫候選的結果：轉速、轉軸、轉動效率與候選位移都是資料庫先驗，單鏡頭不能唯一決定。</p>
+              <ResultCards result={matchedResult} averageVelocityKmh={completedVelocity?.velocityKmh??matchedResult.velocity_kmh} flightSeconds={completedVelocity?.flightSeconds??matchedResult.flight_time_sec} distanceM={outcomeDistance??analysisDistance}/>
+              <details id="full-metrics" className="card"><summary className="card-title">反查依據</summary>
+                <div className="mt-3"><MetricsPanel compact result={matchedResult} matchedResult={matchedResult} calcVelocity={completedVelocity?.velocityKmh} flightSeconds={completedVelocity?.flightSeconds} flightFrames={completedVelocity?.flightFrames} standardDistance={STANDARD_GLOVE_DISTANCE_METERS}/></div>
+              </details>
+            </div>
           </details>
           <p className="text-xs text-slate-400 flex gap-2"><Info className="w-4 h-4 shrink-0"/>平均球速＝距離 ÷ 出手到進手套時間；位移與旋轉為資料庫候選的物理模型值，單鏡頭無法唯一決定轉速與轉動效率。</p>
         </section>}

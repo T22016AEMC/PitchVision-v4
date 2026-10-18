@@ -14,7 +14,7 @@ interface PitchVideoPlayerProps {
  /** Points the user tapped / labelled on the CURRENT frame. */
  markers?:PointMarker[];
  variant?:'fullscreen'|'inline'|'compact';overlay?:{observed:OverlayPoint[];estimated:OverlayPoint[]}|null;
- twoD?:ReactNode;showTwoD?:boolean;viewToggle?:ReactNode;menuExtra?:ReactNode;onBack?:()=>void;onNext?:()=>void;
+ twoD?:ReactNode;showTwoD?:boolean;viewToggle?:ReactNode;menuExtra?:ReactNode;onBack?:()=>void;onNext?:()=>void;onShowVideo?:()=>void;
  assist?:{text:string;count:number;min:number;max:number;onSkip:()=>void;onNoBall:()=>void;onDone:()=>void}|null;
  /** Ball-point confirmation: the program's point on this frame, the user's label on it, and the actions. */
  confirm?:{program:{xNorm:number;yNorm:number;source:'observation'|'estimated'|'user'}|null;label:{xNorm:number;yNorm:number;kind:'confirmed'|'corrected'|'no_ball'}|null;onConfirm:()=>void;onNoBall:()=>void;onMove:(xNorm:number,yNorm:number)=>void;onClear:()=>void}|null;
@@ -24,7 +24,7 @@ interface PitchVideoPlayerProps {
 export interface PointMarker{xNorm:number;yNorm:number;kind:'tap'|'confirmed'|'corrected'|'no_ball';}
 /** A ball position found by the program on one source frame (display only; never fed back into the engine). */
 export interface OverlayPoint{frame:number;timestamp:number;x_norm:number;y_norm:number;}
-export function PitchVideoPlayer({videoUrl,releaseFrame,gloveFrame,totalFrames,fps:providedFps=NaN,timestamps:providedTimes=[],sourceTiming,events,selectionOnly=false,timestampsArePreviewPositions=false,viewMode,busy=false,onCurrentFrameChange,onPositionChange,targetFrameSeek,onSetEvent,onVideoElementReady,isSelectingPoint=null,onSelectCoordinate,markers=[],variant='inline',overlay=null,twoD,showTwoD=false,viewToggle,menuExtra,onBack,onNext,assist=null,confirm=null,onTimeBaseOffset}:PitchVideoPlayerProps){
+export function PitchVideoPlayer({onShowVideo,videoUrl,releaseFrame,gloveFrame,totalFrames,fps:providedFps=NaN,timestamps:providedTimes=[],sourceTiming,events,selectionOnly=false,timestampsArePreviewPositions=false,viewMode,busy=false,onCurrentFrameChange,onPositionChange,targetFrameSeek,onSetEvent,onVideoElementReady,isSelectingPoint=null,onSelectCoordinate,markers=[],variant='inline',overlay=null,twoD,showTwoD=false,viewToggle,menuExtra,onBack,onNext,assist=null,confirm=null,onTimeBaseOffset}:PitchVideoPlayerProps){
  const videoRef=useRef<HTMLVideoElement|null>(null),previewCanvas=useRef<HTMLCanvasElement|null>(null),session=useRef<LocalFrameInterpolation|null>(null),request=useRef(0);
  const [isPlaying,setIsPlaying]=useState(false),[isMetadataReady,setIsMetadataReady]=useState(false),[fine,setFine]=useState(false),[position,setPosition]=useState<TimePosition>({timeSec:0,kind:"original",left:0,right:0,alpha:0});
  const [preview,setPreview]=useState<PreviewFrame|null>(null),[previewState,setPreviewState]=useState<'idle'|'processing'|'ready'|'failed'>('idle'),[previewError,setPreviewError]=useState('');
@@ -174,6 +174,7 @@ export function PitchVideoPlayer({videoUrl,releaseFrame,gloveFrame,totalFrames,f
    {/* Overlay controls (fullscreen marking and inline result views) */}
    {!isCompact&&videoUrl&&<div className={`ov-layer ${controlsOn||showTwoD?'':'ov-hidden'}`}>
     <div className="ov-top">
+     {showTwoD&&onShowVideo&&<button type="button" id="btn-twod-back" onClick={onShowVideo} className="ov-pill ov-pill-go">‹ 回到影片</button>}
      {showMarks&&<button type="button" id="set-release-time" aria-pressed={Boolean(events.release)} disabled={!canMark} onClick={()=>mark('release')} className={`ov-pill ${events.release?'ov-pill-release-on':'ov-pill-release'}`}>{events.release?`出手 ${evLabel(events.release)}`:'標記出手'}</button>}
      {assist&&<div id="assist-banner" role="status" className="ov-banner">
       <p className="font-bold text-sm">{assist.text}</p>
@@ -184,7 +185,7 @@ export function PitchVideoPlayer({videoUrl,releaseFrame,gloveFrame,totalFrames,f
       </div>
       <button type="button" id="assist-skip" onClick={assist.onSkip} className="ov-pill !max-w-none w-full">略過，直接看結果</button>
      </div>}
-     {!showMarks&&!assist&&<span/>}
+     {!showMarks&&!assist&&!(showTwoD&&onShowVideo)&&<span/>}
      <div className="ov-cluster">
       {!showTwoD&&<button type="button" id="btn-play" aria-label={isPlaying?'暫停影片':'播放影片'} aria-pressed={isPlaying} disabled={busy||!isMetadataReady} onClick={togglePlay} className="ov-icon">{isPlaying?<Pause size={20}/>:<Play size={20}/>}</button>}
       <button type="button" id="player-menu-btn" aria-label="更多功能" aria-expanded={menuOpen} onClick={()=>setMenuOpen(o=>!o)} className="ov-icon"><MoreHorizontal size={20}/></button>

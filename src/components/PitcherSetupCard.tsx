@@ -1,8 +1,10 @@
 import React from 'react';
 import {Ruler,Footprints,Mountain} from 'lucide-react';
 import {PitcherBiometrics} from '../types';
+import {distancePrior} from '../services/distancePrior';
 
 interface PitcherSetupCardProps {
+  distanceOverrideM?:number|null;onDistanceOverride?:(value:number|null)=>void;
   biometrics:PitcherBiometrics;
   onChange:(updated:PitcherBiometrics)=>void;
   recomputeBiometrics:(hasMound:boolean,pitcherHeightCm:number,strideOption:'ai_auto'|'manual',manualStrideDistanceCm?:number)=>PitcherBiometrics;
@@ -12,7 +14,8 @@ function Stepper({id,label,deltas,onStep}:{id:string;label:string;deltas:number[
   return <div id={id} className="grid grid-cols-4 gap-1.5">{deltas.map(d=><button key={d} type="button" aria-label={`${label} ${d>0?'+':''}${d} cm`} onClick={()=>onStep(d)} className="btn-step">{d>0?'+':''}{d}</button>)}</div>;
 }
 
-export const PitcherSetupCard:React.FC<PitcherSetupCardProps>=({biometrics,onChange,recomputeBiometrics})=>{
+export const PitcherSetupCard:React.FC<PitcherSetupCardProps>=({biometrics,onChange,recomputeBiometrics,distanceOverrideM=null,onDistanceOverride})=>{
+  const prior=distancePrior(biometrics);
   const handleMoundToggle=(hasMound:boolean)=>onChange(recomputeBiometrics(hasMound,biometrics.pitcherHeightCm,biometrics.strideOption,biometrics.manualStrideDistanceCm));
   const handleHeightChange=(height:number)=>{if(!Number.isFinite(height))return;const clamped=Math.max(130,Math.min(215,height));onChange(recomputeBiometrics(biometrics.hasMound,clamped,biometrics.strideOption,biometrics.manualStrideDistanceCm));};
   const handleStrideModeChange=(mode:'ai_auto'|'manual')=>onChange(recomputeBiometrics(biometrics.hasMound,biometrics.pitcherHeightCm,mode,biometrics.manualStrideDistanceCm));
@@ -61,8 +64,13 @@ export const PitcherSetupCard:React.FC<PitcherSetupCardProps>=({biometrics,onCha
 
     <dl id="derived-distance" className="grid grid-cols-2 gap-2 text-sm">
       <div className="stat"><dt>出手延伸量</dt><dd>{biometrics.calculatedExtensionM} m</dd></div>
-      <div className="stat"><dt>出手→進手套距離</dt><dd className="text-cyan-200">{biometrics.effectiveTravelDistanceM} m</dd></div>
+      <div className="stat"><dt>出手→網距離（先驗）</dt><dd className="text-cyan-200">{distanceOverrideM??prior.priorM} m</dd></div>
     </dl>
-    <p className="text-[11px] text-slate-400">距離＝18.44 m − 延伸量 + 0.90 m（V4.7 引擎公式，以標準投手板距離為基準）。身高與距離是程式校正尺度的依據，請盡量填準確。</p>
+    <p className="text-[11px] text-slate-400">先驗距離＝18.44 m − 延伸量（沒有捕手，不加手套後縮；舊版多加 0.90 m，約 {prior.legacyM} m）。影片量不到距離，分析結果會附 ±0.7 m 左右的範圍。身高與距離是校正尺度的依據，請盡量填準確。</p>
+    {onDistanceOverride&&<div className="space-y-1">
+      <label className="text-xs text-slate-300 flex items-center gap-2">已量過距離？輸入覆寫（選填）
+        <input id="input-distance-override" aria-label="出手到網距離 (m)" type="number" inputMode="decimal" min="8" max="25" step="0.05" placeholder={String(prior.priorM)} value={distanceOverrideM??''} onChange={e=>{const v=e.target.value.trim();const n=Number(v);onDistanceOverride(v===''||!Number.isFinite(n)||n<8||n>25?null:n);}} className="w-24 rounded bg-slate-900 border border-slate-700 px-2 py-1 text-sm font-mono"/> m</label>
+      {distanceOverrideM!==null&&<button type="button" id="btn-distance-clear" onClick={()=>onDistanceOverride(null)} className="link-btn">清除，改用先驗</button>}
+    </div>}
   </div>;
 };

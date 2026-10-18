@@ -90,3 +90,10 @@
 
 - 需 Node 22、pnpm 11.4.0；部署流程見 `DEPLOYMENT.md`（Render Static Site，分支 baseline-v4，Actions 觸發 Deploy Hook）。
 - 測試影片只在本機，不提交、不部署。
+
+## 8. 5.0.3 狀態（相機／距離／事件／位移／球種／出手速度）
+
+- 方法與限制見 `docs/GEOMETRY_FIT.md`；準確度對照見 `test-results/accuracy-5.0.3.json`（本機產生，不提交；`pnpm run eval:accuracy`）。
+- 已做：C1 相機自動估計、D1 距離先驗（不含捕手後縮）、A4 撞網事件擬合、M1 位移重算（含範圍）、P1 球種前三名、A2 出手速度。
+- 未做（5.0.4）：轉速、轉軸的物理回推。
+- 未解：慣用手（資料庫沒有）、距離與尺度單鏡頭無法量測、IVB 範圍寬、直球實拍的球種前三名沒有出現四縫線直球。
