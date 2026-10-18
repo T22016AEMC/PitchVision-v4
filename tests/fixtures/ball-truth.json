@@ -1,0 +1,219 @@
+{
+  "description": "Hand-confirmed ball positions for the two local test clips. Coordinates only (no images). Pixel coordinates are in the 720x1280 converted .mp4; the iPhone .mov originals are the same picture at 3x (multiply by 3). Frame numbers start at 0 and refer to the container-timestamp order (first frame = F0).",
+  "coordinateSpace": {
+    "width": 720,
+    "height": 1280
+  },
+  "clips": {
+    "straight": {
+      "files": [
+        "直球.mp4",
+        "直球.mov"
+      ],
+      "view": "pitcher_rear",
+      "fps": 24,
+      "release": {
+        "frame": 126.5,
+        "note": "F126 the ball is still in the hand; release is between F126 and F127"
+      },
+      "evaluationWindow": {
+        "first": 124,
+        "last": 147,
+        "note": "release - 2 frames to the last confirmed point; frames after F147 are not scored"
+      },
+      "confirmed": [
+        {
+          "frame": 127,
+          "x": 363,
+          "y": 570
+        },
+        {
+          "frame": 128,
+          "x": 365,
+          "y": 586
+        },
+        {
+          "frame": 129,
+          "x": 367,
+          "y": 599
+        },
+        {
+          "frame": 130,
+          "x": 370,
+          "y": 610
+        },
+        {
+          "frame": 131,
+          "x": 372,
+          "y": 619
+        },
+        {
+          "frame": 133,
+          "x": 373,
+          "y": 633
+        },
+        {
+          "frame": 134,
+          "x": 376,
+          "y": 643
+        },
+        {
+          "frame": 135,
+          "x": 378,
+          "y": 650
+        },
+        {
+          "frame": 136,
+          "x": 380,
+          "y": 657
+        },
+        {
+          "frame": 143,
+          "x": 391,
+          "y": 675
+        },
+        {
+          "frame": 144,
+          "x": 393,
+          "y": 682
+        },
+        {
+          "frame": 145,
+          "x": 396,
+          "y": 691
+        },
+        {
+          "frame": 146,
+          "x": 397,
+          "y": 700
+        },
+        {
+          "frame": 147,
+          "x": 399,
+          "y": 709
+        }
+      ],
+      "hidden": [],
+      "segments": "F127-F136 flight toward the net, F137-F142 slow drift beside the net (contested, see contested), F143-F147 falling along the net",
+      "tolerancePx720": 3,
+      "contested": [
+        {
+          "frameFirst": 137,
+          "frameLast": 142,
+          "userStatement": "hidden by the pitcher's follow-through (as given with the original truth)",
+          "reviewNote": "Review at 6x zoom of the 720p clip: a white ball is visible in every one of these frames, to the right of the black bag, creeping right/down: approx F137 (382,663), F138 (383,662), F139 (384,662), F140 (386,664), F141 (388,667), F142 (390,670). The pitcher's leg crosses the right edge but not the ball. Awaiting the owner's confirmation. Until then detections in these frames count as neither hits nor false positives.",
+          "reviewedPositions720": [
+            [
+              137,
+              382,
+              663
+            ],
+            [
+              138,
+              383,
+              662
+            ],
+            [
+              139,
+              384,
+              662
+            ],
+            [
+              140,
+              386,
+              664
+            ],
+            [
+              141,
+              388,
+              667
+            ],
+            [
+              142,
+              390,
+              670
+            ]
+          ]
+        },
+        {
+          "frameFirst": 132,
+          "frameLast": 132,
+          "userStatement": "hidden behind the fence wire (as given with the original truth)",
+          "reviewNote": "Review of the 4K original at 10x zoom: a cream-coloured ball is visible at approx (374,627) in F132, exactly on the path between F131 (372,619) and F133 (373,633); the fence mesh only overlays it. Awaiting the owner's confirmation; detections here count as neither hits nor false positives.",
+          "reviewedPositions720": [
+            [
+              132,
+              374,
+              627
+            ]
+          ]
+        }
+      ],
+      "releaseNote": "Pre-release frames F124-F125 have no visible ball; F126 the ball is in the hand (position not given): detections at F126 are neutral, at F124-F125 count as false positives.",
+      "neutral": [
+        126
+      ]
+    },
+    "knuckle": {
+      "files": [
+        "彈指曲球.mp4",
+        "彈指曲球.mov"
+      ],
+      "view": "pitcher_rear",
+      "fps": 24,
+      "release": {
+        "frame": 96.5,
+        "note": "approximately F96-F97; the camera rotates around the release"
+      },
+      "evaluationWindow": {
+        "first": 94,
+        "last": 101,
+        "note": "scored strictly only up to F101; see uncertain"
+      },
+      "confirmed": [
+        {
+          "frame": 97,
+          "x": 338,
+          "y": 564,
+          "note": "motion-blurred, cream coloured"
+        },
+        {
+          "frame": 98,
+          "x": 348,
+          "y": 562,
+          "note": "motion-blurred"
+        },
+        {
+          "frame": 99,
+          "x": 358,
+          "y": 566
+        },
+        {
+          "frame": 100,
+          "x": 364,
+          "y": 570
+        },
+        {
+          "frame": 101,
+          "x": 366,
+          "y": 574
+        }
+      ],
+      "uncertain": [
+        {
+          "frameFirst": 102,
+          "frameLast": 113,
+          "reason": "the ball falls in front of a distant person (olive/yellow clothing) and then the pitcher's leg enters; at 4x zoom the ball cannot be told apart from the clothing, so no position is asserted and detections in these frames are neither counted as hits nor as false positives"
+        }
+      ],
+      "distractors": [
+        {
+          "description": "a second white ball lying still on the ground, about (310,930) in F94 at 720p; it moves in the image because the camera rotates",
+          "frameFirst": 90,
+          "frameLast": 130
+        }
+      ],
+      "tolerancePx720": 3
+    }
+  }
+}

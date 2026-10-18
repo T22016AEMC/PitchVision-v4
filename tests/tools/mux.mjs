@@ -1,0 +1,11 @@
+// Test-only ISO BMFF muxer for real WebCodecs H.264 samples (same method as tests/generate-fps-fixtures.mjs).
+const u32=n=>{const b=Buffer.alloc(4);b.writeUInt32BE(n);return b;},u16=n=>{const b=Buffer.alloc(2);b.writeUInt16BE(n);return b;},zeros=n=>Buffer.alloc(n),box=(type,...data)=>{const body=Buffer.concat(data);return Buffer.concat([u32(body.length+8),Buffer.from(type),body]);},full=(type,version,flags,...data)=>box(type,Buffer.from([version,(flags>>16)&255,(flags>>8)&255,flags&255]),...data);
+const matrix=Buffer.concat([u32(65536),u32(0),u32(0),u32(0),u32(65536),u32(0),u32(0),u32(0),u32(1073741824)]);
+export function mux(f){const {width,height}=f,times=f.pts,scale=1000000,deltas=times.map((t,i)=>i+1<times.length?times[i+1]-t:f.lastDuration),duration=times.at(-1)+deltas.at(-1),ftyp=box('ftyp',Buffer.from('isom'),u32(512),Buffer.from('isomiso2avc1mp41')),mdat=box('mdat',...f.chunks.map(c=>Buffer.from(c.bytes)));
+ const mvhd=full('mvhd',0,0,u32(0),u32(0),u32(scale),u32(duration),u32(65536),u16(256),zeros(10),matrix,zeros(24),u32(2));
+ const tkhd=full('tkhd',0,7,u32(0),u32(0),u32(1),u32(0),u32(duration),zeros(8),u16(0),u16(0),u16(0),u16(0),matrix,u32(width*65536),u32(height*65536));
+ const mdhd=full('mdhd',0,0,u32(0),u32(0),u32(scale),u32(duration),u16(21956),u16(0)),hdlr=full('hdlr',0,0,u32(0),Buffer.from('vide'),zeros(12),Buffer.from('Synthetic test video\0'));
+ const avc1=box('avc1',zeros(6),u16(1),zeros(16),u16(width),u16(height),u32(72*65536),u32(72*65536),u32(0),u16(1),zeros(32),u16(24),u16(65535),box('avcC',Buffer.from(f.config)));
+ const stsd=full('stsd',0,0,u32(1),avc1),stts=full('stts',0,0,u32(deltas.length),...deltas.flatMap(d=>[u32(1),u32(d)])),stsc=full('stsc',0,0,u32(1),u32(1),u32(times.length),u32(1)),stsz=full('stsz',0,0,u32(0),u32(times.length),...f.chunks.map(c=>u32(c.bytes.length))),stco=full('stco',0,0,u32(1),u32(ftyp.length+8)),keys=f.chunks.flatMap((c,i)=>c.type==='key'?[u32(i+1)]:[]),stss=full('stss',0,0,u32(keys.length),...keys);
+ const dinf=box('dinf',full('dref',0,0,u32(1),full('url ',0,1))),minf=box('minf',full('vmhd',0,1,zeros(8)),dinf,box('stbl',stsd,stts,stsc,stsz,stco,stss));return Buffer.concat([ftyp,mdat,box('moov',mvhd,box('trak',tkhd,box('mdia',mdhd,hdlr,minf)))]);
+}

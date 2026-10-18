@@ -1,7 +1,7 @@
 {
   "name": "pitchvision-v4-baseline",
   "private": true,
-  "version": "5.0.1",
+  "version": "5.0.2",
   "type": "module",
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",
@@ -9,10 +9,11 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "verify": "tsc --noEmit && node tests/regression.mjs && node tests/mobile-shell.mjs && node tests/mp4-timing.mjs",
+    "verify": "tsc --noEmit && node tests/regression.mjs && node tests/mobile-shell.mjs && node tests/mp4-timing.mjs && node tests/pitch-ball-tracker.mjs",
     "test:e2e": "node tests/browser-v422.mjs",
     "test:mobile": "node tests/browser-mobile.mjs",
-    "test:iphone": "node tests/browser-iphone-mov.mjs"
+    "test:iphone": "node tests/browser-iphone-mov.mjs",
+    "eval:ball": "node tests/tools/eval-ball-tracker.mjs"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
