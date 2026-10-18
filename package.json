@@ -1,7 +1,7 @@
 {
   "name": "pitchvision-v4-baseline",
   "private": true,
-  "version": "5.0.3-1",
+  "version": "5.0.3-2",
   "type": "module",
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",

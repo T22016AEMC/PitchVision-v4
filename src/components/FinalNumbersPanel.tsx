@@ -10,8 +10,8 @@ const ORDER:FinalItem['key'][]=['releaseSpeed','spinRate','spinAxis','ivb','hb',
 function Card({item}:{item:FinalItem}){
   return <div id={`final-${item.key}`} className="metric-card" data-estimated="1" data-value={item.value} data-lo={item.lo} data-hi={item.hi}>
     <div className="flex items-center justify-between gap-2"><span className="text-xs text-slate-300 font-semibold">{item.label}</span><span className="text-[10px] text-amber-300">推估</span></div>
-    <p className="mt-1 text-2xl font-black font-mono text-white break-words leading-tight">{item.display}{item.unit&&<span className="ml-1 text-sm font-semibold text-slate-400">{item.unit}</span>}</p>
-    <p className="text-[11px] text-cyan-200">{item.key==='spinRate'||item.key==='spinAxis'||item.key==='efficiency'?item.range:`範圍 ${item.range}`}</p>
+    <p className="mt-1 text-2xl font-black font-mono text-white break-words leading-tight"><span data-role="value">{item.display}</span>{item.unit&&<span className="ml-1 text-sm font-semibold text-slate-400">{item.unit}</span>}</p>
+    <p className="text-[11px] text-cyan-200" data-role="range">範圍 {item.range}</p>
     <p className="mt-1 flex flex-wrap gap-1">{item.origin.map(o=><span key={o} className={`tag ${originClass[o]}`}>{o}</span>)}</p>
   </div>;
 }
@@ -44,7 +44,7 @@ export function FinalDebug({final}:{final:FinalNumbers}){
     <p>資料庫先驗：{d.prior.candidates} 個候選，速度窗口 {d.prior.speedWindowKmh[0].toFixed(0)}–{d.prior.speedWindowKmh[1].toFixed(0)} km/h{d.prior.windowWidened?'（已放寬）':''} · IVB {r(d.prior.ivbInch)} · HB {r(d.prior.hbInch)} · 轉速 {r(d.prior.rpm,0)} · 效率 {r(d.prior.efficiencyPct,0)}</p>
     <p>候選飛行條件：距離 {d.prior.flownAt.distanceM.toFixed(2)} m、飛行 {d.prior.flownAt.flightSec.toFixed(3)} s、出手高度 {d.prior.flownAt.releaseHeightM.toFixed(2)} m</p>
     <p>合併後：IVB {r(d.merged.ivbInch)} · HB {r(d.merged.hbInch)} · 有效樣本比 {d.essRatio===null?'—':d.essRatio.toFixed(3)}</p>
-    {d.conflicts.map(c=><p key={c.item} className="text-amber-200">範圍不重疊（{c.item==='ivb'?'IVB':'HB'}）：量測 {r(c.measured)} vs 資料庫 {r(c.prior)}；待查：{c.suspects.join('；')}</p>)}
+    {d.conflicts.map(c=><p key={c.item} className="text-amber-200">矛盾（{c.item==='ivb'?'IVB':'HB'}，{c.kind==='disjoint'?`範圍不重疊，相距 ${c.gapInch.toFixed(1)} 吋`:c.kind==='centres_apart'?`範圍只有邊緣重疊 ${c.overlapInch.toFixed(1)} 吋，中位數差 ${c.medianDifferenceInch.toFixed(1)} 吋，彼此都不在對方範圍內`:'有效樣本比過低'}）：量測 {r(c.measured)} vs 資料庫 {r(c.prior)}；待查：{c.suspects.join('；')}</p>)}
     {d.notes.map(n=><p key={n}>{n}</p>)}
     <p>主要候選{d.mirror?'（含左右鏡像）':''}：{d.topCandidates.map(c=>`#${c.id}${c.mirrored?'鏡像':''} ${c.rpm}rpm ${c.axis} ${c.efficiencyPct}% IVB${c.ivbInch} HB${c.hbInch} (${(c.weight*100).toFixed(0)}%)`).join('；')}</p>
   </div>;

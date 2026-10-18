@@ -37,7 +37,8 @@ export interface FinalDebug{
   measured:{releaseKmh?:Range;avgKmh?:Range;ivbInch?:Range;hbInch?:Range};
   prior:{candidates:number;speedWindowKmh:[number,number];windowWidened:boolean;ivbInch?:Range;hbInch?:Range;rpm?:Range;efficiencyPct?:Range;flownAt:{distanceM:number;flightSec:number;releaseHeightM:number}};
   merged:{ivbInch?:Range;hbInch?:Range};
-  conflicts:{item:'ivb'|'hb';measured:Range;prior:Range;suspects:string[]}[];
+  /** One entry per movement item whose measurement and database prior disagree (see assessAgreement). */
+  conflicts:{item:'ivb'|'hb';kind:Exclude<AgreementKind,'agree'|'one_sided'>|'weight_collapse';measured:Range;prior:Range;gapInch:number;overlapInch:number;medianDifferenceInch:number;suspects:string[]}[];
   essRatio:number|null;
   distanceM:Range;flightSec:Range;
   topCandidates:{id:number;type:string;rpm:number;axis:string;efficiencyPct:number;ivbInch:number;hbInch:number;weight:number;mirrored:boolean}[];
@@ -62,10 +63,27 @@ const MAX_AI_CANDIDATES=240;
 
 const finite=(v:unknown):v is number=>typeof v==='number'&&Number.isFinite(v);
 const rangeOf=(vals:number[],w:number[]):Range=>{const [lo,value,hi]=weightedQuantiles(vals,w,[.05,.5,.95]);return {value,lo,hi};};
-const clock=(h:number)=>{let x=((h%12)+12)%12;let hh=Math.floor(x),mm=Math.round((x-hh)*60);if(mm===60){hh+=1;mm=0;}hh=hh%12;return `${hh===0?12:hh}:${String(mm).padStart(2,'0')}`;};
+export const clock=(h:number)=>{let x=((h%12)+12)%12;let hh=Math.floor(x),mm=Math.round((x-hh)*60);if(mm===60){hh+=1;mm=0;}hh=hh%12;return `${hh===0?12:hh}:${String(mm).padStart(2,'0')}`;};
 const sgn=(v:number,d=1)=>`${v>=0?'+':''}${v.toFixed(d)}`;
 const gauss=(d:number,s:number)=>Math.exp(-.5*(d/s)**2);
 const mixK=(d:number)=>(1-MISMATCH.eps)*gauss(d,SIGMA_M)+MISMATCH.eps*gauss(d,MISMATCH.sigma)*SIGMA_M/MISMATCH.sigma;
+
+/** How the image measurement and the database prior of one movement item relate (both are 5–95% ranges with a median).
+ *  agree        the ranges overlap AND at least one median lies inside the other range
+ *  disjoint     the ranges do not overlap at all
+ *  centres_apart  they overlap, but neither median lies inside the other range (the overlap is only the tails — the two sources
+ *               say different things; a plain overlap test would call this "no contradiction")
+ *  one_sided    one of them is missing (nothing measured, or no database candidate): nothing to compare
+ *  A very wide range that contains the other median is "agree": it cannot contradict anything. */
+export type AgreementKind='agree'|'disjoint'|'centres_apart'|'one_sided';
+export function assessAgreement(meas?:Range,prior?:Range):{kind:AgreementKind;overlapInch:number;gapInch:number;medianDifferenceInch:number}{
+  const ok=(r?:Range):r is Range=>Boolean(r)&&[r!.value,r!.lo,r!.hi].every(Number.isFinite);
+  if(!ok(meas)||!ok(prior))return {kind:'one_sided',overlapInch:NaN,gapInch:NaN,medianDifferenceInch:NaN};
+  const span=Math.min(meas.hi,prior.hi)-Math.max(meas.lo,prior.lo),md=Math.abs(meas.value-prior.value);
+  if(span<0)return {kind:'disjoint',overlapInch:0,gapInch:-span,medianDifferenceInch:md};
+  const measMedianInPrior=prior.lo<=meas.value&&meas.value<=prior.hi,priorMedianInMeas=meas.lo<=prior.value&&prior.value<=meas.hi;
+  return {kind:measMedianInPrior||priorMedianInMeas?'agree':'centres_apart',overlapInch:span,gapInch:0,medianDifferenceInch:md};
+}
 
 interface Meas{w:number;v:number;avg:number;ivb:number|null;hb:number|null;D:number;T:number;y0:number;mx:number;my:number}
 
@@ -148,11 +166,11 @@ export function computeFinalNumbers(inp:FinalInput):FinalNumbers{
     if(!pr&&!meas)return undefined;
     if(!meas)return pr;                                   // nothing measured: database prior only
     if(!pr)return meas;
-    const overlap=meas.lo<=pr.hi&&pr.lo<=meas.hi;
+    const a=assessAgreement(meas,pr);
     const reweighted=sampleW.some(x=>x>0)?rangeOf(M.map(m=>axis==='ivb'?m.ivb!:m.hb!),sampleW):null;
-    if(overlap&&reweighted&&(essRatio??0)>=.02)return reweighted;
-    // conflict: no silent choice — precision-weighted compromise, range covering both, lower confidence
-    lowConf=true;conflicts.push({item:axis,measured:meas,prior:pr,suspects:suspects(axis)});
+    if(a.kind==='agree'&&reweighted&&(essRatio??0)>=.02)return reweighted;
+    // conflict: no silent choice — precision-weighted compromise, range covering both, lower confidence, recorded in the debug data
+    lowConf=true;conflicts.push({item:axis,kind:a.kind==='agree'||a.kind==='one_sided'?'weight_collapse':a.kind,measured:meas,prior:pr,gapInch:a.gapInch,overlapInch:a.overlapInch,medianDifferenceInch:a.medianDifferenceInch,suspects:suspects(axis)});
     const sm=Math.max(.5,(meas.hi-meas.lo)/3.29),sp=Math.max(.5,(pr.hi-pr.lo)/3.29),wm=1/sm**2,wp=1/sp**2;
     return {value:(meas.value*wm+pr.value*wp)/(wm+wp),lo:Math.min(meas.lo,pr.lo),hi:Math.max(meas.hi,pr.hi)};
   };
@@ -179,16 +197,18 @@ export function computeFinalNumbers(inp:FinalInput):FinalNumbers{
   const distTxt=`距離 ${DR.value.toFixed(1)} m（推估，${DR.lo.toFixed(1)}–${DR.hi.toFixed(1)}）`;
   items.push({key:'releaseSpeed',label:'出手速度',value:vR.value,lo:vR.lo,hi:vR.hi,unit:'km/h',display:vR.value.toFixed(0),range:`${vR.lo.toFixed(0)}–${vR.hi.toFixed(0)} km/h`,
     origin:['影像量測','資料庫先驗','物理模型推算'],estimated:true,note:`${distTxt} ÷ 你標的飛行時間 ${TR.value.toFixed(3)} s（每個標記 ±1 格），以阻力模型回推出手速度`});
-  if(rpm)items.push({key:'spinRate',label:'轉速',value:rpm.value,lo:rpm.lo,hi:rpm.hi,unit:'rpm',display:`${Math.round(rpm.lo/10)*10}–${Math.round(rpm.hi/10)*10}`,range:`中位約 ${Math.round(rpm.value/50)*50} rpm`,
+  if(rpm)items.push({key:'spinRate',label:'轉速',value:rpm.value,lo:rpm.lo,hi:rpm.hi,unit:'rpm',display:String(Math.round(rpm.value/10)*10),range:`${Math.round(rpm.lo/10)*10}–${Math.round(rpm.hi/10)*10} rpm`,
     origin:['資料庫先驗'],estimated:true,note:'單鏡頭量不到轉速：資料庫候選依球種、出手速度與位移加權的範圍'});
-  if(axisR)items.push({key:'spinAxis',label:'轉軸',value:axisR.value,lo:axisR.lo,hi:axisR.hi,unit:'',display:`${clock(axisR.lo)}–${clock(axisR.hi)}`,range:`中位約 ${clock(Math.round(axisR.value*4)/4)}`,
+  if(axisR)items.push({key:'spinAxis',label:'轉軸',value:axisR.value,lo:axisR.lo,hi:axisR.hi,unit:'',display:clock(axisR.value),range:`${clock(axisR.lo)}–${clock(axisR.hi)}`,
     origin:['資料庫先驗'],estimated:true,note:'時鐘方向（捕手看投手）；資料庫候選的範圍，不是量測'});
   if(merged.ivbInch)items.push({key:'ivb',label:'垂直位移',value:merged.ivbInch.value,lo:merged.ivbInch.lo,hi:merged.ivbInch.hi,unit:'吋',display:sgn(merged.ivbInch.value),range:`${sgn(merged.ivbInch.lo)} – ${sgn(merged.ivbInch.hi)} 吋`,
     origin:hasMove?['影像量測','資料庫先驗']:['資料庫先驗'],estimated:true,note:`相對同起點、只有重力與阻力的無旋轉球路（IVB）${conflicts.some(c=>c.item==='ivb')?'；影像與資料庫不一致，範圍已放寬':''}`});
   if(merged.hbInch)items.push({key:'hb',label:'水平位移',value:merged.hbInch.value,lo:merged.hbInch.lo,hi:merged.hbInch.hi,unit:'吋',display:sgn(merged.hbInch.value),range:`${sgn(merged.hbInch.lo)} – ${sgn(merged.hbInch.hi)} 吋`,
     origin:hasMove?['影像量測','資料庫先驗']:['資料庫先驗'],estimated:true,note:`捕手看向投手的右方為正（HB）${conflicts.some(c=>c.item==='hb')?'；影像與資料庫不一致，範圍已放寬':''}`});
-  if(eff)items.push({key:'efficiency',label:'旋轉效率',value:eff.value,lo:eff.lo,hi:eff.hi,unit:'%',display:`${eff.lo.toFixed(0)}–${eff.hi.toFixed(0)}`,range:`中位約 ${Math.round(eff.value)}%`,
+  if(eff)items.push({key:'efficiency',label:'旋轉效率',value:eff.value,lo:eff.lo,hi:eff.hi,unit:'%',display:eff.value.toFixed(0),range:`${eff.lo.toFixed(0)}–${eff.hi.toFixed(0)} %`,
     origin:['資料庫先驗'],estimated:true,note:'陀螺旋轉看不到：資料庫候選的範圍'});
+  // every item: the big number is the median / best estimate and it lies inside its own 90% range
+  for(const i of items){if(!(i.lo<=i.hi))[i.lo,i.hi]=[i.hi,i.lo];i.value=Math.min(i.hi,Math.max(i.lo,i.value));}
   const top=cands.map((c,i)=>({c,w:spinW[i]})).sort((a,b)=>b.w-a.w).slice(0,5),tw=spinW.reduce((a,b)=>a+b,0)||1;
   return {
     status:!inp.fit?'fallback':lowConf||inp.fit.status!=='ok'?'low_confidence':'ok',items,pitchTypeMode:ai?'ai':'given',pitchType:ai?null:inp.selectedPitchType,pitchTypes,
