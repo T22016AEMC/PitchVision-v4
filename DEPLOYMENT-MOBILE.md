@@ -9,7 +9,7 @@
 | 欄位 | 值 |
 |---|---|
 | 服務類型 | Static Site |
-| 建議服務名稱 | `pitchvision-mobile` |
+| 建議服務名稱 | `PitchVision-v4-1` |
 | Repository | `https://github.com/T22016AEMC/PitchVision-v4`（Public Git repository） |
 | Branch | `mobile-v5` |
 | Root Directory | 留空 |
@@ -25,12 +25,12 @@ Build Command 會先跑 `verify`（256 組回歸、資料庫雜湊、手機外�
 
 1. 登入 https://dashboard.render.com ，右上角 **New** → **Static Site**。
 2. 選 **Public Git Repository**，貼上 `https://github.com/T22016AEMC/PitchVision-v4`，按 **Connect**。
-3. Name 填 `pitchvision-mobile`；Branch 選 `mobile-v5`；Root Directory 留空。
+3. Name 填 `PitchVision-v4-1`；Branch 選 `mobile-v5`；Root Directory 留空。
 4. Build Command、Publish Directory 依上表填入。
 5. 展開 **Advanced** → **Add Environment Variable**，新增 `NODE_VERSION`=`22` 與 `SKIP_INSTALL_DEPS`=`true`。
 6. 按 **Create Static Site**，等待第一次建置完成（Logs 內應看到 `verify` 與 `vite build` 成功）。
 7. 進入服務 **Redirects/Rewrites** 頁，新增 Source `/*`、Destination `/index.html`、Action `Rewrite`，儲存。
-8. 記下新網址（預設 `https://pitchvision-mobile.onrender.com`；若名稱已被使用，Render 會加上尾碼）。
+8. 記下新網址（預設 `https://pitchvision-v4-1.onrender.com`；若名稱已被使用，Render 會加上尾碼）。
 
 ## 自動更新（Deploy Hook）
 
@@ -60,7 +60,7 @@ git push origin mobile-v5
 公開網址驗收（同一支測試，不啟動本機伺服器）：
 
 ```powershell
-$env:BASE_URL='https://pitchvision-mobile.onrender.com'
+$env:BASE_URL='https://pitchvision-v4-1.onrender.com'
 pnpm run test:mobile
 ```
 
