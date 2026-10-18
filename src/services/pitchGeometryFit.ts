@@ -113,6 +113,12 @@ function project(R:number[][],pos:V3,f:number,w:number,h:number,P:V3){
   return {u:w/2+f*x/z,v:h/2+f*y/z,depth:z};
 }
 
+/** Pixel position of one fitted sample's ball at `tau` seconds after its release (diagnostics: where the extrapolated release point lands). */
+export function projectSampleAt(s:{pos:V3;yaw:number;pitch:number;roll:number;f:number;flight:FlightParams},W:number,H:number,tau:number){
+  const R=poseMatrix({pos:s.pos,yaw:s.yaw,pitch:s.pitch,roll:s.roll,f:s.f,w:W,h:H}),[P]=flightPositions(s.flight,[Math.max(0,tau)]);
+  const q=project(R,s.pos,s.f,W,H,P);return {x:q.u,y:q.v,radiusPx:s.f*BALL_RADIUS_M/q.depth,world:P};
+}
+
 // ── public types ─────────────────────────────────────────────────────────
 export interface FitObservation{frame:number;time:number;x:number;y:number;radius:number}
 export interface FitInput{
@@ -129,12 +135,17 @@ export interface FitInput{
   useRadius?:boolean;useStop?:boolean;
   /** Likelihood tempering (>=1) so the reported ranges account for model mismatch; calibrated on synthetic coverage. */
   temper?:number;
+  /** 5.0.3.1: 'marks' (default) = the owner's release / net marks ARE the event times, each ±1 frame (the mark is the first frame
+   *  after the event, so the window is mark − 1.5 … mark + 0.5 frames); the picture never moves them. 'auto' = the 5.0.3 behaviour
+   *  (net time from the image), only for clips without marks, and always reported as low confidence. */
+  eventSource?:'marks'|'auto';
 }
 export interface GeometryFit{
   status:'ok'|'low_confidence'|'failed';reasons:string[];notes?:string[];
   camera?:{positionM:Range[];yawDeg:Range;pitchDeg:Range;rollDeg:Range;focalPx:Range;geometry:CameraGeometry;source:'estimated'};
   distance?:{m:Range;source:string;priorM:number;sigmaM:number};
-  events?:{releaseSec:Range;gloveSec:Range;stopFrame:number|null;stopDetected:boolean;releaseVsMarkFrames:Range;gloveVsMarkFrames:Range;releaseFrameFloat:Range;gloveFrameFloat:Range};
+  events?:{releaseSec:Range;gloveSec:Range;stopFrame:number|null;stopDetected:boolean;releaseVsMarkFrames:Range;gloveVsMarkFrames:Range;releaseFrameFloat:Range;gloveFrameFloat:Range;
+    source:'marks'|'auto';contact:NetContact};
   launch?:{heightM:Range;angleDeg:Range;azimuthDeg:Range;speedKmh:Range;source:'estimated'};
   movement?:{ivbInch:Range;hbInch:Range};
   speed?:{avgKmh:Range;releaseKmh:Range;flightSec:Range};
@@ -143,20 +154,44 @@ export interface GeometryFit{
 }
 export interface FitSample{w:number;cost:number;pos:V3;yaw:number;pitch:number;roll:number;f:number;D:number;tr:number;tg:number;flight:FlightParams;ivb:number;hb:number;pxRms:number}
 
-/** Index of the first frame at which the ball has stopped at the net (or null). Image-only, frame-rate independent. */
-export function detectStop(obs:FitObservation[],sigmaPx:number):{index:number|null;stopX:number;stopY:number}{
-  const n=obs.length;if(n<6)return {index:null,stopX:NaN,stopY:NaN};
-  const step=(i:number)=>Math.hypot(obs[i+1].x-obs[i].x,obs[i+1].y-obs[i].y)/Math.max(1,obs[i+1].frame-obs[i].frame);
-  for(let j=3;j<n-2;j++){
-    const ref=(step(j-1)+step(j-2))/2;if(ref<4*sigmaPx)continue;
-    if(step(j)<.85*ref&&step(j+1)<.5*ref&&step(j+1)<.5*step(j-1)){
-      const rest=obs.slice(j+1),sx=[...rest.map(p=>p.x)].sort((a,b)=>a-b),sy=[...rest.map(p=>p.y)].sort((a,b)=>a-b),mx=sx[Math.floor(sx.length/2)],my=sy[Math.floor(sy.length/2)];
-      const tol=Math.max(3*sigmaPx,.4*ref);let c=j+1;
-      while(c-1>=3&&Math.hypot(obs[c-1].x-mx,obs[c-1].y-my)<=tol)c--;
-      return {index:c,stopX:mx,stopY:my};
+/** Where the ball meets the net, from the image alone (5.0.3.1).
+ *  The net is the first ABRUPT drop of the per-frame image step below what the preceding steps predict (a straight-line trend of
+ *  the last three steps, so the smooth perspective slow-down of a ball flying away from the camera is not a stop), followed by a
+ *  step that stays small (the ball is held by the net, pushed back, or starts to slide down it). Contact lies between the last
+ *  free observation and the next one; the fraction of the predicted step actually travelled gives the contact time. The start of
+ *  the fall along the net (image y increasing with growing steps) is reported too, for comparison with a "net" mark set on the
+ *  visible bulge or drop. Frame-rate independent; thresholds are in units of the position noise.
+ *  index = first observation after contact (null = no contact found). */
+export interface NetContact{index:number|null;stopX:number;stopY:number;contactTime:number;contactFrame:number;predictedStepPx:number;dropStepPx:number;fallStartFrame:number|null}
+export function detectNetContact(obs:FitObservation[],sigmaPx:number):NetContact{
+  const none:NetContact={index:null,stopX:NaN,stopY:NaN,contactTime:NaN,contactFrame:NaN,predictedStepPx:NaN,dropStepPx:NaN,fallStartFrame:null};
+  const n=obs.length;if(n<6)return none;
+  const gap=(i:number)=>Math.max(1,obs[i+1].frame-obs[i].frame);
+  const step=(i:number)=>Math.hypot(obs[i+1].x-obs[i].x,obs[i+1].y-obs[i].y)/gap(i);
+  const noise=Math.SQRT2*sigmaPx; // noise of one step
+  for(let j=3;j<n-1;j++){
+    const s=[step(j-3),step(j-2),step(j-1)],trend=s[2]+(s[2]-s[0])/2;
+    const pred=Math.max(.6*s[2],Math.min(1.15*Math.max(...s),trend));
+    if(pred<4*sigmaPx)continue;                                      // ball barely moving in the image: no evidence either way
+    const drop=step(j),after=j+1<n-1?step(j+1):null;
+    if(after===null){if(!(drop<.35*pred))continue;}                  // last observation: only a clear single drop counts
+    else{
+      if(!(after<Math.max(.5*pred,2*noise)&&after<.6*s[2]))continue; // must stay small afterwards (held / pushed back / starting to fall)
+      if(!(drop+after<1.5*pred))continue;                           // over two frames at least half a frame of travel is missing
+      if(j+2<n-1&&step(j+2)>.85*pred&&step(j+2)>step(j+1)*3&&obs[j+3].y<=obs[j+2].y)continue; // resumes at full speed upward/sideways: a tracking glitch
     }
+    const frac=Math.min(1,Math.max(0,drop/pred));
+    const contactTime=obs[j].time+frac*(obs[j+1].time-obs[j].time),contactFrame=obs[j].frame+frac*gap(j);
+    // fall along the net: first post-contact frame from which image y keeps increasing with growing steps
+    let fallStartFrame:number|null=null;
+    for(let k=j+1;k+2<n;k++){const d1=obs[k+1].y-obs[k].y,d2=obs[k+2].y-obs[k+1].y;if(d1>.5*noise&&d2>d1+noise*.5){fallStartFrame=obs[k].frame;break;}}
+    return {index:j+1,stopX:obs[j+1].x,stopY:obs[j+1].y,contactTime,contactFrame,predictedStepPx:pred,dropStepPx:drop,fallStartFrame};
   }
-  return {index:null,stopX:NaN,stopY:NaN};
+  return none;
+}
+/** 5.0.3 compatible wrapper: index of the first observation after the ball met the net (or null). */
+export function detectStop(obs:FitObservation[],sigmaPx:number):{index:number|null;stopX:number;stopY:number}{
+  const c=detectNetContact(obs,sigmaPx);return {index:c.index,stopX:c.stopX,stopY:c.stopY};
 }
 
 export function releaseHeightPriorM(heightCm:number,hasMound:boolean){
@@ -171,16 +206,27 @@ export function fitPitchGeometry(input:FitInput):GeometryFit{
   // frames before the owner's release mark are the ball in the hand (or unknown): they are never treated as free flight
   const obs=[...input.observations].filter(o=>[o.x,o.y,o.time].every(Number.isFinite)&&o.time>=input.markRelease.timeSec-1e-6).sort((a,b)=>a.frame-b.frame);
   if(obs.length<6)return {status:'failed',reasons:['影片中找到的球點少於 6 個，無法校正相機與幾何']};
-  const useStop=input.useStop!==false;
-  let stop=useStop?detectStop(obs,sigma):{index:null as number|null,stopX:NaN,stopY:NaN};
-  // a stop far from the owner's net mark is more likely a perspective slow-down than the net: do not trust it
-  if(stop.index!==null&&Math.abs(obs[stop.index].time-input.markGlove.timeSec)>.17){notes.push('偵測到的停球位置與你標的進手套相差超過 0.17 秒，不採用，沿用你標的進手套並放寬範圍');stop={index:null,stopX:NaN,stopY:NaN};}
-  const free=stop.index===null?obs:obs.slice(0,stop.index),stopped=stop.index===null?[]:obs.slice(stop.index);
+  const useStop=input.useStop!==false,fromMarks=input.eventSource!=='auto';
+  const markR=input.markRelease.timeSec,markG=input.markGlove.timeSec;
+  const contact=useStop?detectNetContact(obs,sigma):detectNetContact([],sigma);
+  let stop={index:contact.index,stopX:contact.stopX,stopY:contact.stopY};
+  // a contact far from the owner's net mark is more likely a tracking glitch or a perspective slow-down than the net
+  if(stop.index!==null&&Math.abs(contact.contactTime-markG)>.17){notes.push('影像判斷的撞網時間與你標的相差超過 0.17 秒，不採用');stop={index:null,stopX:NaN,stopY:NaN};}
+  // free flight: from the release mark until the ball meets the net (image contact), and never the net-mark frame itself
+  const freeEnd=fromMarks?markG-.5*dt:Infinity;
+  const free=(stop.index===null?obs:obs.slice(0,stop.index)).filter(o=>o.time<freeEnd),stopped=stop.index===null?[]:obs.slice(stop.index);
   if(free.length<5)return {status:'failed',reasons:['自由飛行的球點少於 5 個（球停得太早或球點太少）']};
-  const tFirst=free[0].time,markR=input.markRelease.timeSec,markG=input.markGlove.timeSec;
-  // priors for the event times
-  const rLo=markR-1.5*dt,rHi=Math.min(markR+.25*dt,tFirst-1e-4);
-  const gLo=stop.index!==null?obs[stop.index-1].time:markG-1.5*dt,gHi=stop.index!==null?obs[stop.index].time:markG+.5*dt;
+  const tFirst=free[0].time;
+  // priors for the event times. marks: mark − 1.5 … mark + 0.5 frames (±1 frame around the middle of the frame interval that
+  // ends at the mark); auto: release as 5.0.3, net from the image contact ±0.5 frame (or the initial value ±1 frame).
+  const rLo=markR-1.5*dt,rHi=Math.min(markR+(fromMarks?.5:.25)*dt,tFirst-1e-4);
+  const contactOk=stop.index!==null&&Number.isFinite(contact.contactTime);
+  const gLo=fromMarks?markG-1.5*dt:contactOk?contact.contactTime-.5*dt:markG-1.5*dt,gHi=fromMarks?markG+.5*dt:contactOk?contact.contactTime+.5*dt:markG+.5*dt;
+  if(!fromMarks)reasons.push('沒有使用者標記：出手與撞網時間為自動判斷（低信心）');
+  if(fromMarks&&Number.isFinite(contact.contactTime)){
+    const diff=(contact.contactTime-markG)/dt;
+    if(Math.abs(diff)>1.5)notes.push(`影像判斷球在 F${contact.contactFrame.toFixed(1)} 撞網（球速突變），與你標的 F${input.markGlove.frame} 差 ${diff>0?'+':''}${diff.toFixed(1)} 格；最終數字仍以你的標記為準`);
+  }
   const hRel=releaseHeightPriorM(input.biometrics.heightCm,input.biometrics.hasMound);
   const D0=input.distance.overrideM??input.distance.priorM,sD=input.distance.overrideM!==undefined?0.03:input.distance.sigmaM;
   const f0=input.focal.px,fRel=input.focal.relSigma;
@@ -190,8 +236,15 @@ export function fitPitchGeometry(input:FitInput):GeometryFit{
   const sigStop=6*sigma;
 
   // Draws (what the picture cannot determine): focal scale, release→net distance, release time, net time.
-  interface Draw{fs:number;D:number;tr:number;tg:number}
-  const priorDraw=():Draw=>({fs:R.uniform(1-fRel,1+fRel),D:R.truncNormal(D0,sD,D0-2.5*sD,D0+2.5*sD),tr:R.uniform(rLo,rHi),tg:R.uniform(gLo,gHi)});
+  interface Draw{fs:number;D:number;tr:number;tg:number;stratum:number}
+  // marks: the event times are stratified (4 × 4 cells of their ±1-frame windows) and the weights are normalised within each cell,
+  // so the times keep exactly the owner's mark ±1 frame and the picture only re-weights what it can inform (camera, distance, focal).
+  const SK=4;let drawCount=0;
+  const priorDraw=():Draw=>{
+    const k=drawCount++,a=k%SK,b=Math.floor(k/SK)%SK;
+    const tr=fromMarks?rLo+(a+R.next())/SK*(rHi-rLo):R.uniform(rLo,rHi),tg=fromMarks?gLo+(b+R.next())/SK*(gHi-gLo):R.uniform(gLo,gHi);
+    return {fs:R.uniform(1-fRel,1+fRel),D:R.truncNormal(D0,sD,D0-2.5*sD,D0+2.5*sD),tr,tg,stratum:fromMarks?a*SK+b:0};
+  };
   const NP=11,PRIOR_ROWS=NP,STOP_ROWS=2;
 
   const times=free.map(o=>o.time);
@@ -242,17 +295,24 @@ export function fitPitchGeometry(input:FitInput):GeometryFit{
 
   const dof=Math.max(1,2*free.length+(useRadius?free.length:0)+(stopped.length?2:0)-7);
   const run=(n:number,draw:()=>{d:Draw;logq:number})=>{
-    const out:{w:number;cost:number;s:ReturnType<typeof evalDraw>}[]=[];let rejected=0;
-    for(let i=0;i<n;i++){const {d,logq}=draw();const e=evalDraw(d);if(!e){rejected++;continue;}out.push({w:e.logEvidence-logq,cost:e.cost,s:e});}
+    const out:{w:number;cost:number;stratum:number;s:ReturnType<typeof evalDraw>}[]=[];let rejected=0;
+    for(let i=0;i<n;i++){const {d,logq}=draw();const e=evalDraw(d);if(!e){rejected++;continue;}out.push({w:e.logEvidence-logq,cost:e.cost,stratum:d.stratum,s:e});}
     return {out,rejected};
   };
   // stage 1: draws from the priors (importance weight = marginal likelihood)
-  let {out:stage,rejected}=run(Math.round(N*.6),()=>({d:priorDraw(),logq:0}));
-  const normalise=(rows:typeof stage)=>{const m=Math.max(...rows.map(r=>r.w));return rows.map(r=>({...r,w:Math.exp(r.w-m)}));};
+  let {out:stage,rejected}=run(fromMarks?N:Math.round(N*.6),()=>({d:priorDraw(),logq:0}));
+  const normalise=(rows:typeof stage)=>{
+    if(!fromMarks){const m=Math.max(...rows.map(r=>r.w));return rows.map(r=>({...r,w:Math.exp(r.w-m)}));}
+    // within-cell normalisation: every non-empty time cell carries the same total weight (its prior mass)
+    const cells=new Map<number,typeof rows>();for(const r of rows){const c=cells.get(r.stratum)??[];c.push(r);cells.set(r.stratum,c);}
+    const out:typeof rows=[];
+    for(const c of cells.values()){const m=Math.max(...c.map(r=>r.w)),e=c.map(r=>Math.exp(r.w-m)),s=e.reduce((a,b)=>a+b,0);c.forEach((r,i)=>out.push({...r,w:e[i]/s}));}
+    return out;
+  };
   let rows=normalise(stage);
   const ess=(rs:typeof rows)=>{const s=rs.reduce((a,r)=>a+r.w,0),s2=rs.reduce((a,r)=>a+r.w*r.w,0);return s*s/Math.max(1e-30,s2);};
-  // stage 2: refine around the heavy draws (per-dimension Gaussian proposal truncated to the prior support), proper importance weights
-  if(rows.length&&ess(rows)<80){
+  // stage 2 (auto events only): refine around the heavy draws (per-dimension Gaussian proposal truncated to the prior support)
+  if(!fromMarks&&rows.length&&ess(rows)<80){
     const keys:(keyof Draw)[]=['fs','D','tr','tg'];
     const get=(r:typeof rows[number],k:keyof Draw)=>{const s=r.s!.sample;switch(k){case 'fs':return s.f/f0;case 'D':return s.D;case 'tr':return s.tr;default:return s.tg;}};
     const w=rows.map(r=>r.w),sumW=w.reduce((a,b)=>a+b,0);
@@ -289,7 +349,8 @@ export function fitPitchGeometry(input:FitInput):GeometryFit{
     camera:{positionM:[0,1,2].map(k=>q(s=>s.pos[k])),yawDeg:q(s=>s.yaw),pitchDeg:q(s=>s.pitch),rollDeg:q(s=>s.roll),focalPx:q(s=>s.f),geometry:g,source:'estimated'},
     distance:{m:q(s=>s.D),source:input.distance.overrideM!==undefined?'owner':'prior+track',priorM:D0,sigmaM:sD},
     events:{releaseSec:q(s=>s.tr),gloveSec:q(s=>s.tg),stopFrame:stop.index!==null?obs[stop.index].frame:null,stopDetected:stop.index!==null,
-      releaseVsMarkFrames:q(s=>releaseFrame(s.tr)-input.markRelease.frame),gloveVsMarkFrames:q(s=>gloveFrame(s.tg)-input.markGlove.frame),releaseFrameFloat:q(s=>releaseFrame(s.tr)),gloveFrameFloat:q(s=>gloveFrame(s.tg))},
+      releaseVsMarkFrames:q(s=>releaseFrame(s.tr)-input.markRelease.frame),gloveVsMarkFrames:q(s=>gloveFrame(s.tg)-input.markGlove.frame),releaseFrameFloat:q(s=>releaseFrame(s.tr)),gloveFrameFloat:q(s=>gloveFrame(s.tg)),
+      source:fromMarks?'marks':'auto',contact},
     launch:{heightM:q(s=>s.flight.y0),angleDeg:q(s=>deg(Math.atan2(s.flight.vy,s.flight.vz))),azimuthDeg:q(s=>deg(Math.atan2(s.flight.vx,s.flight.vz))),speedKmh:q(s=>Math.hypot(s.flight.vx,s.flight.vy,s.flight.vz)*3.6),source:'estimated'},
     movement:{ivbInch:q(s=>s.ivb),hbInch:q(s=>s.hb)},
     speed:{avgKmh:q(s=>s.D/(s.tg-s.tr)*3.6),releaseKmh:q(s=>Math.hypot(s.flight.vx,s.flight.vy,s.flight.vz)*3.6),flightSec:q(s=>s.tg-s.tr)},

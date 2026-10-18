@@ -69,7 +69,8 @@ export function runGeometryStage(a:GeometryStageArgs):GeometryStageResult{
   const tr=fit.events.releaseSec.value,tg=fit.events.gloveSec.value;
   try{
     const first=a.times[0],last=a.times[a.times.length-1];
-    if(tr>first&&tg<last&&tg>tr){
+    // 5.0.3.1: with owner marks the marks ARE the event times — the engine gets them unchanged (one speed answer only)
+    if(fit.events.source!=='marks'&&tr>first&&tg<last&&tg>tr){
       const fitted:SelectedEvents={release:selectEvent(describePosition(a.times,tr),a.times),glove:selectEvent(describePosition(a.times,tg),a.times)};
       eventView=eventAnalysisView(a.times,fitted,a.durationSec);events=fitted;eventsUsed=true;
     }
@@ -79,9 +80,6 @@ export function runGeometryStage(a:GeometryStageArgs):GeometryStageResult{
   const ranking=rankPitchTypes(a.db,fit.samples??[]);
   const geometry=markEstimatedCamera(fit.camera.geometry);
   const estimates=buildEstimates(fit,ranking,{distanceOverride:Boolean(override),usedInEngine:{camera:true,distance:true,events:eventsUsed}});
-  // what the owner's own marks would give, so the page can show both
-  const markT=a.events.glove.timeSec-a.events.release.timeSec;
-  const atMarks=D/markT*3.6;
-  const speedItem=estimates.items.find(i=>i.key==='speedAvg');if(speedItem)speedItem.note=`${speedItem.note}；若採用你標的時間（${f1(markT,3)} s）則為 ${f1(atMarks)} km/h`;
+  // 5.0.3.1: the event times ARE the owner's marks (±1 frame), so there is only one speed; no second "at your marks" answer.
   return {estimates,fit,fitUsed:true,geometry,biometrics:bio(D),events,eventView,distanceM:D};
 }
