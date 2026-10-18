@@ -23,3 +23,22 @@ export function finalNumbersForTest(c:any,fitInput:FitInput,o:{ranker503?:boolea
   return {fitStatus:fit.status,given:run(t.pitchType),ai:run(ai),givenNoMirror:run(t.pitchType,false),aiMirror:run(ai,true),
     ranker503:r503?{top1Ok:r503.top3[0]?.pitchType===t.pitchType,top3Ok:r503.top3.some(x=>x.pitchType===t.pitchType)}:null};
 }
+
+/** 5.0.3.2 Step 2: per movement item, the measured range, the database range, whether they overlap (the 5.0.3.1 rule) and whether
+ *  the page flagged a contradiction (the 5.0.3.2 rule) — for the true pitch type and for a deliberately wrong one. */
+const WRONG:Record<string,string>={fastball:'曲球 (Curveball)',sinker:'橫掃球 (Sweeper)',cutter:'曲球 (Curveball)',slider:'變速球 (Changeup)',sweeper:'二縫線/伸卡球 (Sinker)',curve:'四縫線直球 (Fastball)',knuckleCurve:'四縫線直球 (Fastball)',changeup:'滑球 (Slider)',splitter:'卡特球 (Cutter)'};
+export function conflictProbe(c:any,fitInput:FitInput){
+  const fit=fitPitchGeometry(fitInput),t=c.truth,ai=PITCH_TYPE_OPTIONS[0];
+  if(!(fit.status==='ok'&&fit.samples?.length))return {skipped:fit.status};
+  const fallback={distanceM:fitInput.distance.priorM,sigmaM:fitInput.distance.sigmaM,markFlightSec:fitInput.markGlove.timeSec-fitInput.markRelease.timeSec,frameSec:1/fitInput.fps,releaseHeightM:1.8};
+  const one=(type:string)=>{
+    const f=computeFinalNumbers({db:PITCH_DATABASE,selectedPitchType:type,aiOption:ai,fit,fallback}),d=f.debug;
+    const item=(k:'ivb'|'hb')=>{const m=k==='ivb'?d.measured.ivbInch:d.measured.hbInch,p=k==='ivb'?d.prior.ivbInch:d.prior.hbInch,fin=f.items.find(i=>i.key===k)!,truth=k==='ivb'?t.ivbInch:t.hbInch;
+      const old=!(m&&p&&m.lo<=p.hi&&p.lo<=m.hi)||(d.essRatio!==null&&d.essRatio<.02),cf=d.conflicts.find(x=>x.item===k);
+      return {measured:m&&[m.value,m.lo,m.hi],database:p&&[p.value,p.lo,p.hi],overlap:Boolean(m&&p&&m.lo<=p.hi&&p.lo<=m.hi),flaggedBefore:old,flaggedNow:Boolean(cf),kind:cf?.kind??null,gapInch:cf?.gapInch??null,
+        merged:[fin.value,fin.lo,fin.hi],truth,mergedErr:fin.value-truth,truthInMerged:truth>=fin.lo&&truth<=fin.hi,truthInMeasured:m?truth>=m.lo&&truth<=m.hi:null};};
+    const rel=f.items.find(i=>i.key==='releaseSpeed')!;
+    return {status:f.status,type,ivb:item('ivb'),hb:item('hb'),speed:{measured:[d.measured.releaseKmh!.value,d.measured.releaseKmh!.lo,d.measured.releaseKmh!.hi],candidateWindow:d.prior.speedWindowKmh,truth:t.releaseSpeedKmh,shown:[rel.value,rel.lo,rel.hi]}};
+  };
+  return {fitStatus:fit.status,trueType:one(t.pitchType),wrongType:one(WRONG[c.pitch]??'曲球 (Curveball)')};
+}

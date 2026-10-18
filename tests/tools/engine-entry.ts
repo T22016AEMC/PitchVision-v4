@@ -13,5 +13,6 @@ export {focalPrior,readCameraMetadata,parseCameraMetadata} from '../../src/servi
 export {runGeometryStage} from '../../src/services/geometryStage';
 export {distancePrior} from '../../src/services/distancePrior';
 export {flightPositions,launchSpeedZ,projectSampleAt,weightedQuantiles} from '../../src/services/pitchGeometryFit';
-export {computeFinalNumbers} from '../../src/services/finalNumbers';
+export {computeFinalNumbers,assessAgreement,clock} from '../../src/services/finalNumbers';
 export {finalNumbersForTest} from './final-test';
+export {conflictProbe} from './final-test';

@@ -1,3 +1,4 @@
+import {readFinalCards,checkFinalCards} from './tools/final-cards-check.mjs';
 import {chromium} from '@playwright/test';
 import {mkdir,writeFile,readFile} from 'node:fs/promises';
 import {resolve} from 'node:path';
@@ -206,12 +207,12 @@ try{
    ok('the six numbers are the first block of the result, right below the video',vis.firstInResult==='final-numbers'&&vis.finalTop>=vis.playerBottom-1);
    ok('every final number has a small range and the 推估 mark',vis.cardText.every(t=>/推估/.test(t)&&/範圍|中位/.test(t)));
    ok('release speed is shown (not average speed)',/出手速度/.test(vis.cardText[0])&&!/平均球速/.test(vis.text));
-   ok('spin rate, axis and efficiency are shown as ranges',/\d+–\d+/.test(vis.cardText[1])&&/\d+:\d\d–\d+:\d\d/.test(vis.cardText[2])&&/\d+–\d+/.test(vis.cardText[5]));
+   {const cards=await readFinalCards(page);report.finalCardValues=cards.map(c=>`${c.key}: ${c.value} (${c.range})`);checkFinalCards(cards,ok);}
    ok('no backend data on the default result page',vis.present.length===0&&!/相機|出手角|出手高度|擬合信心|撞網時間|進手套時間|資料庫匹配|出手到網距離/.test(vis.text));
    ok('AI mode: top three pitch types with likelihood',await page.locator('#pitch-type-top3 li').count()===3&&/%/.test(await page.locator('#pitch-type-top3').innerText())&&await page.locator('#pitch-type-given').count()===0);
    report.finalStatus=await page.locator('#final-numbers').getAttribute('data-status');}
   // debug mode: a long press on the version number (or ?debug=1) shows the backend data; another long press hides it
-  {const ver=page.locator('#app-version');await ver.scrollIntoViewIfNeeded();ok('the version number is on the page',/5\.0\.3\.1/.test(await ver.innerText()));
+  {const ver=page.locator('#app-version');await ver.scrollIntoViewIfNeeded();ok('the version number is on the page',/5\.0\.3\.2/.test(await ver.innerText()));
    const vb=await ver.boundingBox();await page.mouse.move(vb.x+vb.width/2,vb.y+vb.height/2);await page.mouse.down();await page.waitForTimeout(900);await page.mouse.up();
    await page.locator('#debug-panel').waitFor();
    ok('long press on the version opens the debug data',await page.locator('#full-data').isVisible()&&await page.locator('#db-match-data').isVisible()&&await page.locator('#final-debug').isVisible());

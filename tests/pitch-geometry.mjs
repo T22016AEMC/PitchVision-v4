@@ -124,7 +124,7 @@ check(E.fitPitchGeometry({...fitInputFor(cases[0]),observations:cases[0].observa
   const F=run.final;
   check(F&&F.items.length===6&&['releaseSpeed','spinRate','spinAxis','ivb','hb','efficiency'].every(k=>F.items.some(i=>i.key===k)),'six final numbers');
   check(F.items.every(i=>i.estimated&&i.lo<=i.value+1e-9&&i.value<=i.hi+1e-9&&i.origin.length>0&&i.range.length>0),'each has one value inside one range, an origin and the 推估 flag');
-  check(['spinRate','spinAxis','efficiency'].every(k=>{const i=F.items.find(x=>x.key===k);return /–/.test(i.display)&&i.origin.join()==='資料庫先驗';}),'spin rate / axis / efficiency are shown as database-prior ranges');
+  check(['spinRate','spinAxis','efficiency'].every(k=>{const i=F.items.find(x=>x.key===k);return !/–/.test(i.display)&&/–/.test(i.range)&&i.origin.join()==='資料庫先驗';}),'spin rate / axis / efficiency show one median with the 90% range on the small line (database prior)');
   check(F.pitchTypeMode==='ai'&&F.pitchTypes&&F.pitchTypes.top3.length===3,'AI mode: top three pitch types');
   const rel=F.items.find(i=>i.key==='releaseSpeed');
   check(Math.abs(rel.value/c.truth.releaseSpeedKmh-1)<.12&&rel.lo<rel.value&&rel.hi>rel.value,`release speed ${rel.value.toFixed(1)} vs truth ${c.truth.releaseSpeedKmh.toFixed(1)} km/h`);
@@ -141,6 +141,43 @@ check(E.fitPitchGeometry({...fitInputFor(cases[0]),observations:cases[0].observa
   const fv=fb.items.find(i=>i.key==='releaseSpeed');
   check(fb.status==='fallback'&&Math.abs(fv.value-E.launchSpeedZ(16.6,.5)*3.6)<1.5&&fv.hi/fv.lo>1.15,`fallback: release speed from distance prior ÷ marked time with ±1-frame and ±0.7 m spread (${fv.lo.toFixed(0)}–${fv.hi.toFixed(0)})`);
   check(fb.items.find(i=>i.key==='ivb').origin.join()==='資料庫先驗','fallback: movement says it is a database prior');
+}
+
+// ── 8. 5.0.3.2: display format and the measurement-vs-database contradiction check
+{
+  const R=(value,lo,hi)=>({value,lo,hi});
+  // four situations for the contradiction check
+  const overlap=E.assessAgreement(R(10,2,18),R(12,6,20));
+  check(overlap.kind==='agree'&&overlap.overlapInch===12,'overlapping ranges, medians inside each other: agree');
+  const apart=E.assessAgreement(R(-5,-14,3),R(22,15,30));
+  check(apart.kind==='disjoint'&&Math.abs(apart.gapInch-12)<1e-9&&apart.medianDifferenceInch===27,'disjoint ranges: reported with their gap (12 in) and median difference');
+  const edge=E.assessAgreement(R(2.1,-10.6,17.4),R(20.7,12.8,29.7)); // the straight 4K clip: the ranges touch only in their tails
+  check(edge.kind==='centres_apart'&&Math.abs(edge.overlapInch-4.6)<1e-9,'overlap only in the tails and neither median inside the other: centres_apart (a plain overlap test says "no contradiction")');
+  check(E.assessAgreement(undefined,R(20,10,30)).kind==='one_sided'&&E.assessAgreement(R(0,-5,5),undefined).kind==='one_sided'&&E.assessAgreement(R(NaN,0,1),R(1,0,2)).kind==='one_sided','one side empty: nothing to compare');
+  check(E.assessAgreement(R(0,-40,40),R(25,20,30)).kind==='agree','a very wide range that contains the other median cannot contradict it');
+  check(E.assessAgreement(R(0,-40,40),R(60,50,70)).kind==='disjoint','a very wide range does not hide a real gap');
+  // end to end: a contradiction is flagged, widens the range, lowers confidence and is recorded with both ranges and the gap
+  const cv=cases.find(x=>x.truth.pitchType.startsWith('曲球')),fcv=E.fitPitchGeometry({...fitInputFor(cv),samples:200});
+  const fbk={distanceM:16.6,sigmaM:.7,markFlightSec:.5,frameSec:1/cv.fps,releaseHeightM:1.8};
+  const bad=E.computeFinalNumbers({db:E.PITCH_DATABASE,selectedPitchType:'四縫線直球 (Fastball)',aiOption:E.PITCH_TYPE_OPTIONS[0],fit:fcv,fallback:fbk});
+  const cf=bad.debug.conflicts.find(x=>x.item==='ivb');
+  check(cf&&['disjoint','centres_apart'].includes(cf.kind)&&cf.measured&&cf.prior&&Number.isFinite(cf.gapInch)&&Number.isFinite(cf.medianDifferenceInch)&&cf.suspects.length>=3,'contradiction record: item, kind, both ranges, gap, median difference, suspects');
+  check(bad.status==='low_confidence'&&bad.items.find(i=>i.key==='ivb').lo<=Math.min(cf.measured.lo,cf.prior.lo)+1e-9&&bad.items.find(i=>i.key==='ivb').hi>=Math.max(cf.measured.hi,cf.prior.hi)-1e-9,'contradiction: lower confidence and a range that covers both sources');
+  // one side empty end to end: no database candidate for the type → the measured range stands alone, no contradiction invented
+  const none=E.computeFinalNumbers({db:E.PITCH_DATABASE,selectedPitchType:'不存在的球種',aiOption:E.PITCH_TYPE_OPTIONS[0],fit:fcv,fallback:fbk});
+  check(none.debug.conflicts.length===0&&none.items.find(i=>i.key==='ivb'),'no database candidate: no contradiction, the measurement is shown');
+  // display format: the big text is the median, the small line the 90% range, the median inside the range (the axis range may cross 12:00)
+  const fits=E.computeFinalNumbers({db:E.PITCH_DATABASE,selectedPitchType:cv.truth.pitchType,aiOption:E.PITCH_TYPE_OPTIONS[0],fit:fcv,fallback:fbk});
+  check(fits.items.every(i=>i.lo<=i.value&&i.value<=i.hi&&/^[+-]?\d+(\.\d+)?$|^\d{1,2}:\d\d$/.test(i.display)&&!/–/.test(i.display)&&/–|-/.test(i.range)),'every item: single-number display (axis: one clock time), range as a separate string, median inside the range');
+  check(E.clock(11.6666)==='11:40'&&E.clock(0.3333)==='12:20'&&E.clock(12.5)==='12:30'&&E.clock(-0.25)==='11:45','clock face: 11:40, 12:20 (no 0:20), 12:30, 11:45');
+  // an axis range that crosses 12:00: candidates at 11.4–11.9 and 0.1–0.6 o'clock
+  const base=E.uniquePhysicalCandidates(E.PITCH_DATABASE).filter(r=>r.pitch_type==='四縫線直球 (Fastball)').slice(0,40);
+  const axes=[11.45,11.6,11.75,11.9,0.1,0.25,0.4,0.55];
+  const fake=base.map((r,i)=>({...r,id:90000+i,spin_axis_decimal:axes[i%axes.length],spin_axis:'x'}));
+  const cross=E.computeFinalNumbers({db:fake,selectedPitchType:'四縫線直球 (Fastball)',aiOption:E.PITCH_TYPE_OPTIONS[0],fit:null,fallback:{...fbk,markFlightSec:.5}});
+  const ax=cross.items.find(i=>i.key==='spinAxis'),hr=x=>{const m=/^(\d{1,2}):(\d\d)$/.exec(x);return (Number(m[1])%12)+Number(m[2])/60;};
+  const [lo,hi]=ax.range.split('–'),span=(((hr(hi)-hr(lo))%12)+12)%12,off=(((hr(ax.display)-hr(lo))%12)+12)%12;
+  check(span>0&&span<2&&off<=span+1e-9&&/^1[12]:/.test(lo)&&/^12:|^1:/.test(hi),`axis range across 12:00 is one short arc (${ax.range}) and its median ${ax.display} lies inside`);
 }
 
 console.log(JSON.stringify({pitchGeometryChecks:checks,fitUsed:`${used}/6`,worldRmsCm:{old:+(worldOld/used).toFixed(0),new:+(worldNew/used).toFixed(0)},avgSpeedErrPct:+(speedErr/used*100).toFixed(1),typeTop3:`${typeTop3}/${used}`}));
