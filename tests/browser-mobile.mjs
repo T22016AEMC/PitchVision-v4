@@ -194,24 +194,34 @@ try{
   ok('result says how many ball points were found in the video',/影片中找到 \d+ 個球點/.test(summaryText));
   ok('at least 4 ball points found on the synthetic pitch',Number(await page.locator('#ball-track-summary').getAttribute('data-observed'))>=4);
 
-  // ── 4. 結果：影片上的球點、影片／2D 切換 ─────────────────────
-  report.resultCards=await page.locator('#full-data').innerText();
-  // #9: 完整數據 on top; 資料庫匹配數據 is a collapsed block below it
-  {const order=await page.evaluate(()=>{const a=document.querySelector('#full-data'),b=document.querySelector('#db-match-data');return {fullFirst:Boolean(a&&b&&(a.compareDocumentPosition(b)&Node.DOCUMENT_POSITION_FOLLOWING)),collapsed:b?!b.open:null,dbCardsHidden:!document.querySelector('#db-match-data #result-cards')?.checkVisibility?.()};});
-   ok('完整數據 comes before 資料庫匹配數據',order.fullFirst);
-   ok('資料庫匹配數據 is collapsed by default',order.collapsed===true&&order.dbCardsHidden);
+  // ── 4. 結果（5.0.3.1 #16）：六項最終數據在影片下方最上方、預設展開；後台資料只在除錯模式
+  const FINAL_KEYS=['releaseSpeed','spinRate','spinAxis','ivb','hb','efficiency'];
+  {const vis=await page.evaluate(keys=>{const v=s=>{const e=document.querySelector(s);return Boolean(e&&e.checkVisibility?.());};
+     const top=s=>document.querySelector(s)?.getBoundingClientRect().top??null;
+     return {cards:keys.map(k=>v('#final-'+k)),final:v('#final-numbers'),present:['#full-data','#db-match-data','#geometry-cards','#event-time-provenance','#debug-panel','#result-cards','#final-debug','#full-metrics'].filter(s=>document.querySelector(s)),
+       firstInResult:document.querySelector('#result-screen > :not(h2)')?.id??null,playerBottom:document.querySelector('#player-section')?.getBoundingClientRect().bottom??null,finalTop:top('#final-numbers'),
+       text:document.querySelector('#result-screen')?.innerText??'',cardText:keys.map(k=>document.querySelector('#final-'+k)?.innerText??'')};},FINAL_KEYS);
+   report.finalCards=vis.cardText.map(t=>t.replace(/\n/g,' | '));
+   ok('six final numbers are shown without tapping anything',vis.final&&vis.cards.every(Boolean));
+   ok('the six numbers are the first block of the result, right below the video',vis.firstInResult==='final-numbers'&&vis.finalTop>=vis.playerBottom-1);
+   ok('every final number has a small range and the 推估 mark',vis.cardText.every(t=>/推估/.test(t)&&/範圍|中位/.test(t)));
+   ok('release speed is shown (not average speed)',/出手速度/.test(vis.cardText[0])&&!/平均球速/.test(vis.text));
+   ok('spin rate, axis and efficiency are shown as ranges',/\d+–\d+/.test(vis.cardText[1])&&/\d+:\d\d–\d+:\d\d/.test(vis.cardText[2])&&/\d+–\d+/.test(vis.cardText[5]));
+   ok('no backend data on the default result page',vis.present.length===0&&!/相機|出手角|出手高度|擬合信心|撞網時間|進手套時間|資料庫匹配|出手到網距離/.test(vis.text));
+   ok('AI mode: top three pitch types with likelihood',await page.locator('#pitch-type-top3 li').count()===3&&/%/.test(await page.locator('#pitch-type-top3').innerText())&&await page.locator('#pitch-type-given').count()===0);
+   report.finalStatus=await page.locator('#final-numbers').getAttribute('data-status');}
+  // debug mode: a long press on the version number (or ?debug=1) shows the backend data; another long press hides it
+  {const ver=page.locator('#app-version');await ver.scrollIntoViewIfNeeded();ok('the version number is on the page',/5\.0\.3\.1/.test(await ver.innerText()));
+   const vb=await ver.boundingBox();await page.mouse.move(vb.x+vb.width/2,vb.y+vb.height/2);await page.mouse.down();await page.waitForTimeout(900);await page.mouse.up();
+   await page.locator('#debug-panel').waitFor();
+   ok('long press on the version opens the debug data',await page.locator('#full-data').isVisible()&&await page.locator('#db-match-data').isVisible()&&await page.locator('#final-debug').isVisible());
    const g=await page.locator('#geometry-cards').getAttribute('data-status');report.geometryStatus=g;
-   ok('geometry cards state their status (ok / low confidence / fallback)',['ok','low_confidence','fallback'].includes(g));
-   const cards=await page.evaluate(()=>[...document.querySelectorAll('#geometry-cards .metric-card')].map(c=>({id:c.id,estimated:c.dataset.estimated,text:c.innerText})));report.geometryCards=cards.map(c=>c.id);
-   const key=cards.filter(c=>/geo-(speedAvg|speedRelease|distance)/.test(c.id));
-   ok('speed and distance cards carry an origin tag and the estimated flag',key.length>=3&&key.every(c=>c.estimated==='1'&&/影像量測|物理模型推算|資料庫先驗/.test(c.text)));
-   ok('speed and distance cards show a range',key.every(c=>/不確定範圍/.test(c.text)));
-   const top3=await page.locator('#pitch-type-top3 li').count();report.pitchTop3=top3;
-   ok('pitch types are listed with relative likelihood (top 3), or the page says there is no likelihood',g==='fallback'?top3<=3:(top3===3&&/%/.test(await page.locator('#pitch-type-top3').innerText())));
-   if(g==='fallback')ok('fallback says 相機為推測',/相機為推測/.test(await page.locator('#geometry-fallback').innerText()));
-   await page.locator('#db-match-data > summary').click();ok('opening 資料庫匹配數據 shows the database cards',await page.locator('#result-cards').isVisible());await page.locator('#db-match-data > summary').click();}
-  report.provenance=await page.locator('#event-time-provenance').getAttribute('data-engine-flight-seconds');
-  ok('engine received exact marked flight time',Math.abs(Number(report.provenance)-0.5)<1e-9);
+   ok('debug: geometry cards state their status',['ok','low_confidence','fallback'].includes(g));
+   report.provenance=await page.locator('#event-time-provenance').getAttribute('data-engine-flight-seconds');
+   ok('engine received exact marked flight time',Math.abs(Number(report.provenance)-0.5)<1e-9);
+   await shot('34-result-debug',true);
+   await ver.scrollIntoViewIfNeeded();const vb2=await ver.boundingBox();await page.mouse.move(vb2.x+vb2.width/2,vb2.y+vb2.height/2);await page.mouse.down();await page.waitForTimeout(900);await page.mouse.up();
+   ok('a second long press hides the debug data again',await page.locator('#debug-panel').count()===0);}
   await page.locator('#ball-overlay').waitFor();
   report.overlayCounts={observed:Number(await page.locator('#ball-overlay').getAttribute('data-observed-count')),estimated:Number(await page.locator('#ball-overlay').getAttribute('data-estimated-count'))};
   ok('program-found ball points exist',report.overlayCounts.observed>=3);
@@ -236,9 +246,10 @@ try{
   await checkLayout('06-result-2d');await shot('31-result-2d-animation');
   ok('the result page 2D view also shows 回到影片',await page.locator('#btn-twod-back').isVisible());
   await page.locator('#btn-twod-back').click();ok('回到影片 switches the result page back to the video',await page.locator('#view-tab-video').getAttribute('aria-selected')==='true'&&await page.locator('#twod-view').count()===0);
-  await page.locator('#full-data').scrollIntoViewIfNeeded();await shot('32-result-cards',true);
+  await page.locator('#final-numbers').scrollIntoViewIfNeeded();await shot('32-result-cards',true);
   // ── 4b. 確認球點：正確／拖曳修正／這格沒有球、匯出、重新分析
   const stage0=async()=>page.locator('.player-stage').boundingBox();
+  await page.locator('#confirm-details > summary').click();
   await page.locator('#btn-confirm-mode').click();ok('confirm mode on',await page.locator('#btn-confirm-mode').getAttribute('aria-pressed')==='true');
   await page.locator('#player-section').scrollIntoViewIfNeeded();
   await gotoFrame(found.frame);await page.waitForFunction(f=>Number(document.querySelector('#current-time-status')?.dataset.sourceIndex)===f,found.frame);
@@ -273,6 +284,7 @@ try{
   // re-analysis uses the confirmed/corrected points as anchors: the corrected frame's marker lands on the corrected position
   const corrected=exported.labels.find(l=>l.status==='corrected');
   await page.locator('#btn-reanalyze-labels').click();await page.locator('#result-screen').waitFor({timeout:120000});
+  if(!(await page.locator('#confirm-details').evaluate(e=>e.open)))await page.locator('#confirm-details > summary').click();
   ok('re-analysis with labels completes and keeps the labels',/已標 3 格/.test(await page.locator('#label-summary').innerText()));
   await gotoFrame(corrected.frame);await page.waitForFunction(f=>Number(document.querySelector('#current-time-status')?.dataset.sourceIndex)===f,corrected.frame);
   await page.locator('#btn-confirm-mode').click(); // leave confirm mode so only the program overlay is drawn
@@ -308,9 +320,15 @@ try{
   await page.reload({waitUntil:'networkidle'});
   ok('labels survive a page reload (same device)',await page.evaluate(()=>Object.keys(localStorage).filter(x=>x.startsWith('pitchvision.ballLabels.v1:')).length)===1);
   await upload(clips.ball,'synthetic-pitch-60fps.mp4');await page.locator('#video-summary').waitFor({timeout:20000});
+  // #17: the owner picks the pitch type → no AI pitch-type prediction on the result page
+  await page.locator('#pitch-type-select').selectOption('四縫線直球 (Fastball)');
   await page.locator('#btn-next-mark').click();await page.locator('#set-release-time').waitFor();await waitSeek();
   await gotoFrame(RELEASE);await page.locator('#set-release-time').click();await gotoFrame(GLOVE);await page.locator('#set-glove-time').click();
   await page.locator('#btn-next-analyze').click();await page.locator('#btn-start-analysis').click();await page.locator('#result-screen').waitFor({timeout:120000});
+  ok('pitch type given: no AI prediction or top three',await page.locator('#pitch-type-top3').count()===0&&await page.locator('#pitch-type-hard').count()===0&&/四縫線直球/.test(await page.locator('#pitch-type-given').innerText())&&await page.locator('#final-numbers').getAttribute('data-mode')==='given');
+  ok('pitch type given: the six numbers are still shown',(await page.locator('#final-numbers .metric-card').count())===6);
+  await shot('35-result-given-type',true);
+  await page.locator('#confirm-details > summary').click();
   ok('the same video loads its stored labels',/已標 2 格/.test(await page.locator('#label-summary').innerText()));
   await page.evaluate(()=>{for(const k of Object.keys(localStorage))if(k.startsWith('pitchvision.ballLabels.v1:'))localStorage.removeItem(k);});
 
@@ -344,19 +362,22 @@ try{
   await shot('51-assist-two-taps');
   await page.locator('#assist-done').click();
   await page.locator('#result-screen').waitFor({timeout:120000});
-  ok('result appears after "done", with no second prompt',await page.locator('#full-data').isVisible()&&await page.locator('#assist-banner').count()===0);
+  ok('result appears after "done", with no second prompt',await page.locator('#final-numbers').isVisible()&&await page.locator('#assist-banner').count()===0);
   ok('the video view says what was found',await page.locator('#ball-track-summary').count()===1);
   await shot('52-result-after-assist');
   // skip path
   await prepNoBall();
   await page.locator('#assist-skip').waitFor({timeout:120000});await page.locator('#assist-skip').click();
-  await page.locator('#result-screen').waitFor();ok('skipping goes straight to the result',await page.locator('#full-data').isVisible());
+  await page.locator('#result-screen').waitFor();ok('skipping goes straight to the result',await page.locator('#final-numbers').isVisible());
   ok('no ball found is stated in words',/影片中沒有找到球/.test(await page.locator('#ball-track-summary').innerText())||await page.locator('#ball-track-summary').getAttribute('data-status')==='tracked');
   // five taps start the analysis by themselves
   await prepNoBall();
   await page.locator('#assist-banner').waitFor({timeout:120000});await waitSeek();
   for(let i=0;i<5;i++){await tapStage(.5+i*.01,.55+i*.02);if(i<4){await page.locator('#step-forward').click();await waitSeek();}}
-  await page.locator('#result-screen').waitFor({timeout:120000});ok('the fifth tap finishes the prompt and analyses',await page.locator('#full-data').isVisible());
+  await page.locator('#result-screen').waitFor({timeout:120000});ok('the fifth tap finishes the prompt and analyses',await page.locator('#final-numbers').isVisible());
+  // ?debug=1 opens the debug data directly (off by default)
+  ok('debug data is off by default',await page.locator('#debug-panel').count()===0&&await page.locator('#app-version').getAttribute('data-debug')==='0');
+  await page.goto(base+'?debug=1',{waitUntil:'networkidle'});ok('?debug=1 turns debug mode on',await page.locator('#app-version').getAttribute('data-debug')==='1'&&/除錯模式/.test(await page.locator('#app-version').innerText()));
 
   // ── 6b. 4K 尺寸（2160×3840）影片：90 FPS 補幀可切換並完成標記，畫面標示「預覽已縮小」
   await page.goto(base,{waitUntil:'networkidle'});

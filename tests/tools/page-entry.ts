@@ -5,6 +5,8 @@ import {trackBaseballSparse} from '../../src/baseballTracker';
 import {runPitchAnalysis} from '../../src/analysisRuntime';
 import {describePosition,selectEvent,eventAnalysisView} from '../../src/services/analysisTimeline';
 import {computePitcherBiometrics} from '../../src/spatialCalibration';
+import {distancePrior} from '../../src/services/distancePrior';
+import {readCameraMetadata} from '../../src/services/cameraMetadata';
 // @ts-ignore plain JS renderer shared with the Node tests
 import {makeScene} from './synth.mjs';
 
@@ -92,7 +94,7 @@ async function compareCapture(first:number,last:number){
   return {requested:last-first+1,sequentialGot:seq.length,frames:out};
 }
 /** The real app analysis path (runPitchAnalysis) on the opened clip with the owner's event marks. */
-async function runApp(p:{release:number;glove:number;view:'catcher'|'pitcher_rear';heightCm?:number;hasMound?:boolean;userPoints?:any[];input?:any}){
+async function runApp(p:{release:number;glove:number;view:'catcher'|'pitcher_rear';heightCm?:number;hasMound?:boolean;userPoints?:any[];pitchType?:string;input?:any}){
   if(!source)throw Error('not open');
   const v=document.createElement('video');v.muted=true;v.playsInline=true;v.src='/video';
   await new Promise<void>((ok,fail)=>{v.onloadeddata=()=>ok();v.onerror=()=>fail(Error('video error'));});
@@ -103,8 +105,9 @@ async function runApp(p:{release:number;glove:number;view:'catcher'|'pitcher_rea
   const eventView=eventAnalysisView(times,events,duration);
   const biometrics=computePitcherBiometrics(p.hasMound??true,p.heightCm??178);
   const geometry:any[]=[];let track:any=null;
+  const cameraMeta=await readCameraMetadata(await (await fetch('/video')).blob()); // as App.tsx does on upload
   const t0=performance.now();
-  const out:any=await runPitchAnalysis({videoElement:v,events,eventView:eventView as any,videoTiming:timing,videoFps:fps,totalVideoFrames:n,sourceTimesValid:true,analysisHasSourceFrames:true,analysisFps:fps,analysisDistance:biometrics.effectiveTravelDistanceM,releaseFrame:eventView.releaseFrame,gloveFrame:eventView.gloveFrame,visibleEndFrame:p.glove,originalFlightFrames:p.glove-p.release+1,selectedPitchType:'🤖 AI 全數據庫自動辨識',cameraViewMode:p.view,biometrics,strictPitchTypeMode:true,allowCrossTypeFallback:false,manualAnchor:null,cameraGeometry:null,useExistingTracking:true,hasAiDetection:false,isCancelled:()=>false,userPoints:p.userPoints,...(p.input||{})},{onProgress:()=>{},onVisibleEndFrame:()=>{},onCameraGeometry:g=>geometry.push(g),onTrack:(t,m)=>{track={t,m};},onConfidence:()=>{},onAiDetection:()=>{}});
+  const out:any=await runPitchAnalysis({videoElement:v,events,eventView:eventView as any,videoTiming:timing,videoFps:fps,totalVideoFrames:n,sourceTimesValid:true,analysisHasSourceFrames:true,analysisFps:fps,analysisDistance:distancePrior(biometrics).priorM,releaseFrame:eventView.releaseFrame,gloveFrame:eventView.gloveFrame,visibleEndFrame:p.glove,originalFlightFrames:p.glove-p.release+1,selectedPitchType:p.pitchType??'🤖 AI 全數據庫自動辨識',cameraViewMode:p.view,biometrics,strictPitchTypeMode:true,allowCrossTypeFallback:false,manualAnchor:null,cameraGeometry:null,useExistingTracking:true,hasAiDetection:false,isCancelled:()=>false,userPoints:p.userPoints,cameraMeta,...(p.input||{})},{onProgress:()=>{},onVisibleEndFrame:()=>{},onCameraGeometry:g=>geometry.push(g),onTrack:(t,m)=>{track={t,m};},onConfidence:()=>{},onAiDetection:()=>{}});
   v.remove();
   return {ms:performance.now()-t0,fps,width:timing.width,height:timing.height,times,geometry:geometry.at(-1)??null,outcome:out,track};
 }

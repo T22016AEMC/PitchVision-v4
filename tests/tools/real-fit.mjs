@@ -12,12 +12,12 @@ export async function fitReal(name,o={}){
   const fp=E.focalPrior(j.width,j.height,meta);
   const input={observations:obs.map(p=>({frame:p.frame,time:p.time,x:p.x,y:p.y,radius:p.radius})),width:j.width,height:j.height,fps:j.fps,view:c.view,
     markRelease:{frame:c.release,timeSec:times[c.release]},markGlove:{frame:c.glove,timeSec:times[c.glove]},times,
-    focal:{px:fp.px,relSigma:fp.relSigma},biometrics:{heightCm:Number(process.env.HEIGHT_CM||178),hasMound:process.env.MOUND!=='0'},distance:distancePrior(o.distanceMode??'noCatcher'),seed:2024,samples:o.samples,useRadius:o.useRadius,useStop:o.useStop,temper:o.temper};
+    focal:{px:fp.px,relSigma:fp.relSigma},biometrics:{heightCm:Number(process.env.HEIGHT_CM||178),hasMound:process.env.MOUND!=='0'},distance:distancePrior(o.distanceMode??'noCatcher'),seed:2024,samples:o.samples,useRadius:o.useRadius,useStop:o.useStop,temper:o.temper,eventSource:o.eventSource};
   const t0=performance.now(),fit=E.fitPitchGeometry(input),ms=performance.now()-t0;
   const rank=fit.camera?E.rankPitchTypes(E.PITCH_DATABASE,fit.samples):null;
   return {name,clip:c,input,fit,rank,ms,obs,meta,focalBasis:fp.basis};
 }
-if(process.argv[1].endsWith('real-fit.mjs')){
+if(process.argv[1]?.endsWith('real-fit.mjs')){
   const r2=x=>x?`${x.value.toFixed(2)} [${x.lo.toFixed(2)}, ${x.hi.toFixed(2)}]`:'-';
   for(const name of ['straight-720p','straight-4k','knuckle-720p','knuckle-4k']){
     const {fit,rank,ms,clip,obs}=await fitReal(name);

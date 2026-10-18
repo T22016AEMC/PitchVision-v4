@@ -14,6 +14,14 @@ export const PITCH_GROUPS={
   curve:'曲球 (Curveball)',knuckleCurve:'彈指曲球 (Knuckle Curve)',changeup:'變速球 (Changeup)',splitter:'指叉球 (Splitter)'
 };
 
+/** Independent per-type spin ranges (axis in clock hours as the engine: 12 = backspin, 3 = break to +X; efficiency %; release km/h). */
+export const INDEPENDENT_TYPES={
+  fastball:{axis:[12.0,13.5],eff:[80,98],rpm:[1600,2300],speed:[105,140]},sinker:{axis:[13.6,15.0],eff:[75,95],rpm:[1500,2200],speed:[100,135]},
+  cutter:{axis:[10.8,11.9],eff:[25,55],rpm:[1700,2400],speed:[100,130]},slider:{axis:[9.3,10.6],eff:[20,50],rpm:[1700,2500],speed:[95,125]},
+  sweeper:{axis:[8.7,9.6],eff:[50,85],rpm:[1800,2600],speed:[90,120]},curve:{axis:[6.5,7.8],eff:[65,95],rpm:[1600,2500],speed:[85,115]},
+  knuckleCurve:{axis:[6.0,7.2],eff:[70,98],rpm:[1600,2500],speed:[85,115]},changeup:{axis:[13.8,15.2],eff:[70,92],rpm:[1100,1800],speed:[90,120]},
+  splitter:{axis:[13.0,14.5],eff:[35,75],rpm:[800,1500],speed:[95,125]}
+};
 /** Focal length the app can assume from the phone model (long side × 0.78) and its relative uncertainty. */
 export const FOCAL_PRIOR={ratio:0.78,relSigma:0.10};
 
@@ -26,7 +34,15 @@ export async function makeWorldCase(o){
   const E=await loadEngine(),R=rng(o.seed??1);
   const view=o.view??'pitcher_rear',fps=o.fps??24,W=o.width??720,H=o.height??1280,long=Math.max(W,H),scale=long/1280;
   const pool=E.uniquePhysicalCandidates(E.PITCH_DATABASE).filter(r=>r.pitch_type===PITCH_GROUPS[o.pitch??'fastball']);
-  const rec=pool[Math.floor(R.next()*pool.length)%pool.length];
+  let rec=pool[Math.floor(R.next()*pool.length)%pool.length];
+  if(o.source==='independent'){
+    // spin drawn from per-type ranges written independently of the database (typical pitch-design ranges, the database's hand
+    // convention: +X = catcher's right), with speed and spin drawn independently of each other. 'mirror' flips the hand.
+    const P=INDEPENDENT_TYPES[o.pitch??'fastball'],IR=rng((o.seed??1)*13+4242),u=([a,b])=>IR.uniform(a,b);
+    let axis=u(P.axis);if(o.hand==='mirror')axis=((12-axis)%12+12)%12;
+    const v=u(P.speed),Dref=17.5,Tref=Math.expm1(.0062*Dref)/(.0062*v/3.6);
+    rec={...rec,id:-1,spin_rate_rpm:Math.round(u(P.rpm)),spin_axis_decimal:axis,spin_efficiency_pct:+u(P.eff).toFixed(1),flight_time_sec:Tref,standard_distance_m:Dref};
+  }
   const D=o.distanceM??R.uniform(15.5,18.0),T=rec.flight_time_sec*(D/17.5),height=R.uniform(1.6,2.0);
   const flight=E.integrateCandidateFlight(D,T,height,rec.spin_rate_rpm,rec.spin_axis_decimal,rec.spin_efficiency_pct);
   // aim: small rotation of the whole path about the vertical through the release point, plus a release offset
@@ -46,9 +62,22 @@ export async function makeWorldCase(o){
     const ok=samples.every(p=>{const q=g.rotation[2].reduce((s,v,i)=>s+v*[p.x,p.y,p.z][i],g.translation[2]);if(q<=1)return false;const u=E.projectWorld(g,p.x,p.y,p.z);return u.x>.03*W&&u.x<.97*W&&u.y>.03*H&&u.y<.97*H;});
     if(ok)break;if(tries>200)throw Error('could not place camera');
   }
+  // What happens at the net (5.0.3.1, from the real straight clip: the ball pushes the net back, rebounds a little, is held for a few
+  // frames and then slides down). 'legacy' = the 5.0.3 model (stops dead on the net plane, then drops). Its own random stream, so
+  // camera, path and tracker noise are identical in both models.
+  const NR=rng((o.seed??1)*7+99991),netModel=o.net??'deform';
+  const net={depth:NR.uniform(.12,.35),rebound:NR.uniform(.02,.10),hold:NR.uniform(.04,.15),fallG:NR.uniform(.5,.95),overlapPx:NR.uniform(.3,1.0),blurFrac:NR.uniform(.02,.05)};
+  const pe=samples.at(-1),pp=samples.at(-2),dtS=T/(samples.length-1),vEnd=[(pe.x-pp.x)/dtS,(pe.y-pp.y)/dtS,(pe.z-pp.z)/dtS],sEnd=Math.hypot(...vEnd),uEnd=vEnd.map(v=>v/sEnd);
+  const afterNet=tau=>{
+    if(netModel==='legacy'){const fall=.5*9.80665*tau**2;return {x:pe.x,y:Math.max(.05,pe.y-Math.min(fall,.6)),z:pe.z};}
+    const ts=2*net.depth/sEnd;let s,drop=0;
+    if(tau<=ts)s=sEnd*tau-sEnd*sEnd*tau*tau/(4*net.depth);
+    else{s=net.depth-net.rebound*Math.min(1,(tau-ts)/.04);const tf=tau-ts-net.hold;if(tf>0)drop=Math.min(.5*net.fallG*9.80665*tf*tf,Math.max(0,pe.y-.1));}
+    return {x:pe.x+uEnd[0]*s,y:pe.y+uEnd[1]*s-drop,z:pe.z+uEnd[2]*s};
+  };
   const g=camera.geometry,world=t=>{ // truth position at time since release
     if(t<=0){const p=samples[0];return {x:p.x,y:p.y,z:p.z};}
-    if(t>=T){const p=samples.at(-1),fall=.5*9.80665*(t-T)**2;return {x:p.x,y:Math.max(.05,p.y-Math.min(fall,.6)),z:p.z};}
+    if(t>=T)return afterNet(t-T);
     const u=t/T*(samples.length-1),i=Math.min(samples.length-2,Math.floor(u)),f=u-i,a=samples[i],b=samples[i+1];
     return {x:a.x+(b.x-a.x)*f,y:a.y+(b.y-a.y)*f,z:a.z+(b.z-a.z)*f};
   };
@@ -58,7 +87,13 @@ export async function makeWorldCase(o){
   const kRad=R.uniform(1.0,1.6),sigma=(o.noisePx??1.0)*scale,observations=[];
   for(let k=releaseFrame+(o.hideFirst??0);k<=gloveFrame+(o.afterNet??3);k++){
     const p=world(times[k]-tr),cam=g.rotation[2].reduce((s,v,i)=>s+v*[p.x,p.y,p.z][i],g.translation[2]),q=E.projectWorld(g,p.x,p.y,p.z);
-    const out=(o.outliers??.03)>R.next(),s=out?sigma*4:sigma,x=q.x+R.normal()*s,y=q.y+R.normal()*s;
+    const out=(o.outliers??.03)>R.next(),s=out?sigma*4:sigma;let x=q.x+R.normal()*s,y=q.y+R.normal()*s;
+    if(netModel!=='legacy'){
+      // motion blur: the found centre slides along the streak; ball over the bag / net after contact: a small extra centroid error
+      const prev=k>releaseFrame?E.projectWorld(g,...Object.values(world(times[k-1]-tr))):q,streak=Math.hypot(q.x-prev.x,q.y-prev.y);
+      if(streak>0){const b=NR.normal()*net.blurFrac*streak;x+=b*(q.x-prev.x)/streak;y+=b*(q.y-prev.y)/streak;}
+      if(times[k]-tr>T){x+=NR.normal()*net.overlapPx*sigma;y+=NR.normal()*net.overlapPx*sigma;}
+    }
     const rTrue=focal*0.0366/cam,r=Math.max(.8,rTrue*kRad+R.normal()*(.12*rTrue+.3*scale));
     observations.push({frame:k,timestamp:times[k],x,y,x_norm:x/W,y_norm:y/H,radius:r,confidence:out?.6:.9,source:'observation'});
   }
@@ -66,7 +101,7 @@ export async function makeWorldCase(o){
   return {
     seed:o.seed,view,fps,width:W,height:H,pitch:o.pitch??'fastball',record:{id:rec.id,type:rec.pitch_type,rpm:rec.spin_rate_rpm,axis:rec.spin_axis_decimal,eff:rec.spin_efficiency_pct},
     truth:{camera:{position:camera.position,yawDeg:camera.yawDeg,pitchDeg:camera.pitchDeg,rollDeg:camera.rollDeg,focalPx:focal},geometry:g,distanceM:D,flightSec:T,releaseTimeSec:tr,gloveTimeSec:tg,
-      ivbInch:flight.ivb,hbInch:flight.hb,avgSpeedKmh:speedAvg,releaseSpeedKmh:speedRel,releaseAngleDeg:flight.initialAngleDeg,pitchType:rec.pitch_type,releaseHeightM:height,world},
+      ivbInch:flight.ivb,hbInch:flight.hb,avgSpeedKmh:speedAvg,releaseSpeedKmh:speedRel,releaseAngleDeg:flight.initialAngleDeg,pitchType:rec.pitch_type,releaseHeightM:height,world,net:{model:netModel,...net}},
     marks:{releaseFrame,gloveFrame:gloveFrame+(o.gloveMarkLate??0)},times,observations,
     focalPriorPx:long*FOCAL_PRIOR.ratio,focalRelSigma:FOCAL_PRIOR.relSigma
   };

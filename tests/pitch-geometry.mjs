@@ -3,7 +3,7 @@ import {loadEngine} from './tools/engine.mjs';
 import {makeWorldCase} from './tools/world-synth.mjs';
 import {legacyNumbers,runLegacy,summarizeCameraError} from './tools/legacy-run.mjs';
 import {fitInputFor} from './tools/new-run.mjs';
-// 5.0.3 geometry stage: flight/launch maths, distance prior, camera metadata, stop detection, the joint fit on known-truth
+// 5.0.3 / 5.0.3.1 geometry stage: flight/launch maths, distance prior, camera metadata, stop detection, the joint fit on known-truth
 // synthetic pitches (self-consistency only, never real footage), pitch-type ranking and the end-to-end stage inside finishAnalysis.
 let checks=0;const check=(v,label)=>{assert.ok(v,label);checks++;};
 const E=await loadEngine();
@@ -99,6 +99,48 @@ check(E.fitPitchGeometry({...fitInputFor(cases[0]),observations:cases[0].observa
   const ov=(await runLegacy(c,{input:{disableGeometryStage:false,analysisDistance:E.distancePrior(E.computePitcherBiometrics(true,178)).priorM,fitSamples:250,distanceOverrideM:16.2}})).out;
   near(ov.distanceM,16.2,.01,'owner distance is used as given');
   check(ov.estimates.items.find(i=>i.key==='distance').origin.includes('影像量測'),'owner distance is labelled as given by the owner');
+}
+
+// ── 7. 5.0.3.1: owner marks are the event times; the net is a sudden speed drop; one value + one range per final number
+{
+  // a ball that meets a deforming net: contact is found between the last free frame and the next one (not where it rests)
+  const mk=(steps,start=[300,500])=>{let x=start[0],y=start[1];return steps.map((s,i)=>{const p={frame:200+i,time:(200+i)/24,x,y,radius:3};x+=s[0];y+=s[1];return p;});};
+  const net=E.detectNetContact(mk([[2,22],[2,22],[2,21.5],[2,21],[1.5,15],[1,-3],[.5,.8],[1,4],[1.5,8],[1.5,12],[0,0]]),3);
+  check(net.index===5&&net.contactFrame>204.5&&net.contactFrame<205,`contact between F204 and F205 (${net.contactFrame?.toFixed(2)}), not at the resting frame`);
+  check(net.fallStartFrame!==null&&net.fallStartFrame>=206,'the fall along the net is reported separately');
+  // perspective slow-down at 60 fps (small, smooth steps) is not a net
+  check(E.detectNetContact(mk(Array.from({length:30},(_,i)=>[0,8-i*.12])),1).index===null,'smooth slow-down at 60 fps: no contact');
+  // marks: the fitted times stay on the owner's marks (±1 frame window) whatever the picture says; the engine gets the marks unchanged
+  const c=cases[0],inp=fitInputFor(c),dt=1/c.fps;
+  const fm=E.fitPitchGeometry({...inp,samples:200}),late=E.fitPitchGeometry({...inp,samples:200,markGlove:{frame:inp.markGlove.frame+2,timeSec:inp.markGlove.timeSec+2*dt}});
+  check(fm.events.source==='marks'&&Math.abs(fm.events.gloveFrameFloat.value-(inp.markGlove.frame-.5))<.2,'marks mode: net time = mark − ½ frame (middle of the ±1-frame window)');
+  check(Math.abs(late.events.gloveFrameFloat.value-(inp.markGlove.frame+1.5))<.2,'a later owner mark moves the net time with it (the picture does not override the owner)');
+  check(fm.events.gloveFrameFloat.lo>=inp.markGlove.frame-1.5-1e-6&&fm.events.gloveFrameFloat.hi<=inp.markGlove.frame+.5+1e-6,'net time range stays inside the ±1-frame window');
+  const auto=E.fitPitchGeometry({...inp,samples:200,eventSource:'auto'});
+  check(auto.status!=='ok'&&auto.reasons.some(r=>/沒有使用者標記/.test(r)),'automatic events (no marks) are always low confidence');
+  const run=(await runLegacy(c,{input:{disableGeometryStage:false,analysisDistance:16.6,fitSamples:200}})).out;
+  check(Math.abs(run.flightSeconds-(c.times[c.marks.gloveFrame]-c.times[c.marks.releaseFrame]))<1e-9,'the engine receives exactly the marked flight time (one speed answer)');
+  // final numbers
+  const F=run.final;
+  check(F&&F.items.length===6&&['releaseSpeed','spinRate','spinAxis','ivb','hb','efficiency'].every(k=>F.items.some(i=>i.key===k)),'six final numbers');
+  check(F.items.every(i=>i.estimated&&i.lo<=i.value+1e-9&&i.value<=i.hi+1e-9&&i.origin.length>0&&i.range.length>0),'each has one value inside one range, an origin and the 推估 flag');
+  check(['spinRate','spinAxis','efficiency'].every(k=>{const i=F.items.find(x=>x.key===k);return /–/.test(i.display)&&i.origin.join()==='資料庫先驗';}),'spin rate / axis / efficiency are shown as database-prior ranges');
+  check(F.pitchTypeMode==='ai'&&F.pitchTypes&&F.pitchTypes.top3.length===3,'AI mode: top three pitch types');
+  const rel=F.items.find(i=>i.key==='releaseSpeed');
+  check(Math.abs(rel.value/c.truth.releaseSpeedKmh-1)<.12&&rel.lo<rel.value&&rel.hi>rel.value,`release speed ${rel.value.toFixed(1)} vs truth ${c.truth.releaseSpeedKmh.toFixed(1)} km/h`);
+  const given=E.computeFinalNumbers({db:E.PITCH_DATABASE,selectedPitchType:c.truth.pitchType,aiOption:E.PITCH_TYPE_OPTIONS[0],fit:fm,fallback:{distanceM:16.6,sigmaM:.7,markFlightSec:.5,frameSec:dt,releaseHeightM:1.8}});
+  check(given.pitchTypeMode==='given'&&given.pitchTypes===null&&given.pitchType===c.truth.pitchType,'owner pitch type: no pitch-type prediction');
+  // a measurement that contradicts the chosen type (a curveball fit, fastball chosen): no silent pick — conflict, wider range, lower confidence
+  const cv=cases.find(x=>x.truth.pitchType.startsWith('曲球')),fc=E.fitPitchGeometry({...fitInputFor(cv),samples:200});
+  const wrong=E.computeFinalNumbers({db:E.PITCH_DATABASE,selectedPitchType:'四縫線直球 (Fastball)',aiOption:E.PITCH_TYPE_OPTIONS[0],fit:fc,fallback:{distanceM:16.6,sigmaM:.7,markFlightSec:.5,frameSec:1/cv.fps,releaseHeightM:1.8}});
+  const ivbW=wrong.items.find(i=>i.key==='ivb');
+  check(wrong.debug.conflicts.some(x=>x.item==='ivb')&&wrong.status==='low_confidence','contradicting type: the IVB conflict is reported');
+  check(ivbW.lo<=wrong.debug.measured.ivbInch.value&&ivbW.hi>=wrong.debug.prior.ivbInch.value,'contradicting type: the range covers both the measurement and the database');
+  // no usable fit: speed from the priors and the marks, movement from the database only
+  const fb=E.computeFinalNumbers({db:E.PITCH_DATABASE,selectedPitchType:'四縫線直球 (Fastball)',aiOption:E.PITCH_TYPE_OPTIONS[0],fit:null,fallback:{distanceM:16.6,sigmaM:.7,markFlightSec:.5,frameSec:1/24,releaseHeightM:1.8}});
+  const fv=fb.items.find(i=>i.key==='releaseSpeed');
+  check(fb.status==='fallback'&&Math.abs(fv.value-E.launchSpeedZ(16.6,.5)*3.6)<1.5&&fv.hi/fv.lo>1.15,`fallback: release speed from distance prior ÷ marked time with ±1-frame and ±0.7 m spread (${fv.lo.toFixed(0)}–${fv.hi.toFixed(0)})`);
+  check(fb.items.find(i=>i.key==='ivb').origin.join()==='資料庫先驗','fallback: movement says it is a database prior');
 }
 
 console.log(JSON.stringify({pitchGeometryChecks:checks,fitUsed:`${used}/6`,worldRmsCm:{old:+(worldOld/used).toFixed(0),new:+(worldNew/used).toFixed(0)},avgSpeedErrPct:+(speedErr/used*100).toFixed(1),typeTop3:`${typeTop3}/${used}`}));

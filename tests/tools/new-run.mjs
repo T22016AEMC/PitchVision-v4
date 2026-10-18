@@ -38,3 +38,8 @@ export async function newNumbers(c,o={}){
     launch:{angleErrDeg:fit.launch.angleDeg.value-t.releaseAngleDeg,angleInRange:within(fit.launch.angleDeg,t.releaseAngleDeg),heightErrM:fit.launch.heightM.value-t.releaseHeightM}
   };
 }
+/** 5.0.3.1 final numbers (six items) for a synthetic case; null on engines that do not have them (5.0.3). */
+export async function finalNumbersFor(c,o={}){
+  const E=await loadEngine();if(!E.computeFinalNumbers)return null;
+  return E.finalNumbersForTest?E.finalNumbersForTest(c,fitInputFor(c,o),{ranker503:true,...o}):null;
+}

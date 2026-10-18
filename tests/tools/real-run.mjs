@@ -1,13 +1,14 @@
 // Runs the app's real analysis path (runPitchAnalysis) in desktop Chrome on a local clip and saves the outcome as JSON
 // (test-results/real-run/<name>.json). Clips come from ../test videos and are never committed.
-//   node tests/tools/real-run.mjs [--only <substring>] [--out <dir>]
+//   node tests/tools/real-run.mjs [--only <substring>] [--out <dir>] [--given-type]   (--given-type: the owner's pitch type is selected, as on the phone)
+// The distance is the app's own prior (distancePrior), as in App.tsx.
 import {writeFile,mkdir} from 'node:fs/promises';
 import {existsSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {openVideo,bundlePage} from './harness.mjs';
 import {REAL_CLIPS} from './real-clips.mjs';
 
-const args=process.argv.slice(2),only=args.includes('--only')?args[args.indexOf('--only')+1]:null;
+const args=process.argv.slice(2),given=args.includes('--given-type'),only=args.includes('--only')?args[args.indexOf('--only')+1]:null;
 const outDir=resolve(args.includes('--out')?args[args.indexOf('--out')+1]:'test-results/real-run');
 await mkdir(outDir,{recursive:true});
 const folder=resolve('..','test videos');
@@ -19,8 +20,8 @@ for(const c of REAL_CLIPS){
   const v=await openVideo(file,{pageScript});
   try{
     const info=await v.page.evaluate(t=>window.__pv.open(t),v.timing.timestamps);
-    const run=await v.page.evaluate(p=>window.__pv.runApp(p),{release:c.release,glove:c.glove,view:c.view,heightCm:Number(process.env.HEIGHT_CM||178),hasMound:process.env.MOUND!=='0'});
-    await writeFile(resolve(outDir,c.name+'.json'),JSON.stringify(strip({clip:c,info:{offset:info.offset,count:info.count,work:info.info},...run}),null,1));
+    const run=await v.page.evaluate(p=>window.__pv.runApp(p),{release:c.release,glove:c.glove,view:c.view,heightCm:Number(process.env.HEIGHT_CM||178),hasMound:process.env.MOUND!=='0',pitchType:given?c.pitchType:undefined});
+    await writeFile(resolve(outDir,c.name+(given?'-given':'')+'.json'),JSON.stringify(strip({clip:c,selectedPitchType:given?c.pitchType:'🤖 AI 全數據庫自動辨識',info:{offset:info.offset,count:info.count,work:info.info},...run}),null,1));
     const r=run.outcome.result;
     console.log(c.name,run.outcome.status,'ms',Math.round(run.ms),'v',run.outcome.velocityKmh,'type',r?.matched_pitch_type,'ivb',r?.ivb_inch,'hb',r?.hb_inch,'obs',run.outcome.detections?.length);
   }finally{await v.close();}
