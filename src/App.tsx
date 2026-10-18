@@ -1,7 +1,7 @@
 import {formatSourceFps} from './services/sourceTiming';
-import {SelectedEvents,SelectedEvent,PositionKind,describePosition,selectEvent,eventAnalysisView} from './services/analysisTimeline';
+import {SelectedEvents,SelectedEvent,PositionKind,describePosition,selectEvent,eventAnalysisView,sourceIndexAt} from './services/analysisTimeline';
 import {hasUsableSourceTimes,manualAnalysisReason,confirmCfrTiming} from './services/manualAnalysisReadiness';
-import {CameraGeometry,ImagePoint,calibrateGroundReference} from './services/cameraGeometry';
+import {CameraGeometry} from './services/cameraGeometry';
 import React,{useState,useMemo,ChangeEvent,useEffect,useRef} from 'react';
 import type {FrameDetectionResult} from './matchingEngine';
 import {CameraViewMode,PitcherBiometrics,BaseballTrackPoint,VideoTrackMetrics,UnifiedConfidenceScores,ManualAnchorInput,VideoTiming,MatchResult,PitchRecord} from './types';
@@ -10,8 +10,8 @@ import {VideoQualityAssessment} from './services/videoMetadataService';
 import {VideoLoadService,VideoLoadStatus} from './services/videoLoadService';
 import type {AutoFrameDetectionOutput} from './services/autoFrameDetectionEngine';
 import {PITCH_TYPE_OPTIONS} from './shellConstants';
-import {loadAnalysisRuntime,EngineLoadState} from './engineLoader';
-import {PitchVideoPlayer} from './components/PitchVideoPlayer';
+import {loadAnalysisRuntime,EngineLoadState,AnalysisRuntime} from './engineLoader';
+import {PitchVideoPlayer,OverlayPoint} from './components/PitchVideoPlayer';
 import {PitchVisualizer} from './components/PitchVisualizer';
 import {MetricsPanel} from './components/MetricsPanel';
 import {PitcherSetupCard} from './components/PitcherSetupCard';
@@ -19,11 +19,16 @@ import {DatabaseModal} from './components/DatabaseModal';
 import {CodeViewerModal} from './components/CodeViewerModal';
 import {ScientificInfoPanel} from './components/ScientificInfoPanel';
 import {VideoQualityCard} from './components/VideoQualityCard';
-import {StepNav,Step} from './components/StepNav';
+import {StepNav,Step as NavStep} from './components/StepNav';
 import {ResultCards} from './components/ResultCards';
-import {CalibrationPanel} from './components/CalibrationPanel';
 import {AutoDetectPanel} from './components/AutoDetectPanel';
-import {UploadCloud,Loader2,AlertTriangle,CheckCircle,Sparkles,Info,ChevronRight,RotateCcw,FlaskConical} from 'lucide-react';
+import {GroundCalibration} from './components/GroundCalibration';
+import {FpsDialog} from './components/FpsDialog';
+import {UploadCloud,Loader2,AlertTriangle,CheckCircle,Info,ChevronRight,RotateCcw,FlaskConical} from 'lucide-react';
+
+type Step=NavStep|'assist';
+type AnalysisOutcomeDone=Extract<Awaited<ReturnType<AnalysisRuntime['runPitchAnalysis']>>,{status:'done'}>;
+const APP_VERSION=typeof __APP_VERSION__==='string'?__APP_VERSION__:'dev';
 
 export default function App() {
   const [step,setStep]=useState<Step>('video');
@@ -54,12 +59,6 @@ export default function App() {
   const [targetFrameSeek,setTargetFrameSeek]=useState<number|null>(null);
   const [scienceOpen,setScienceOpen]=useState(false);
   const [cameraGeometry,setCameraGeometry]=useState<CameraGeometry|null>(null);
-  const [referencePoints,setReferencePoints]=useState<(ImagePoint|null)[]>([null,null,null,null]);
-  const [referenceSelection,setReferenceSelection]=useState<number|null>(null);
-  const [referenceWidth,setReferenceWidth]=useState(2);
-  const [referenceLength,setReferenceLength]=useState(17.5);
-  const [referenceConfirmed,setReferenceConfirmed]=useState(false);
-  const [referenceFocal,setReferenceFocal]=useState<number|undefined>();
   const analysisDistance=cameraGeometry?.method==='planar_reference'?cameraGeometry.referenceLengthM!:biometrics.effectiveTravelDistanceM;
   const setEvent=(name:'release'|'glove',event:SelectedEvent)=>{setEvents(prev=>({...prev,[name]:event}));setHasAnalyzed(false);if(name==='glove')setVisibleEndFrame(event.right);setManualAnchor(prev=>prev?{...prev,[name==='release'?'point1':'point2']:undefined}:null);};
   // Preview-only positions are not source PTS or measured frames. Quantitative
@@ -75,12 +74,12 @@ export default function App() {
   const markRelease=(frame:number)=>{if(controlTimes[frame]!==undefined)setEvent('release',{...selectEvent(describePosition(controlTimes,controlTimes[frame],videoTiming?.timeBase!=='timestamp'),controlTimes),...(selectionOnly?{sourceSpanSec:NaN,previewQuality:'unavailable' as const}:{})});};
   const markGlove=(frame:number)=>{if(controlTimes[frame]!==undefined)setEvent('glove',{...selectEvent(describePosition(controlTimes,controlTimes[frame],videoTiming?.timeBase!=='timestamp'),controlTimes),...(selectionOnly?{sourceSpanSec:NaN,previewQuality:'unavailable' as const}:{})});};
 
-  // 手動雙錨點模式 (作為輔助走廊，不直接取代整條球路)
+  // Manual ball positions are no longer a visible control: they are collected only by the
+  // "tap the ball" prompt when the program cannot find it (see assist* below).
   const [manualAnchor,setManualAnchor]=useState<ManualAnchorInput|null>(null);
-  const [isSelectingPoint,setIsSelectingPoint]=useState<1|2|null>(null);
 
   // 球種設定與 Strict Mode 控制
-  const [selectedPitchType,setSelectedPitchType]=useState<string>('四縫線直球 (Fastball)');
+  const [selectedPitchType,setSelectedPitchType]=useState<string>(PITCH_TYPE_OPTIONS[0]);
   const [strictPitchTypeMode,setStrictPitchTypeMode]=useState<boolean>(true);
   const [allowCrossTypeFallback,setAllowCrossTypeFallback]=useState<boolean>(false);
 
@@ -92,8 +91,8 @@ export default function App() {
   const analysisInputGeneration=useRef(0);
   const [completedResult,setCompletedResult]=useState<MatchResult|null>(null);
   const [completedVelocity,setCompletedVelocity]=useState<{velocityKmh:number;flightSeconds:number;flightFrames:number}|null>(null);
+  const [detections,setDetections]=useState<BaseballTrackPoint[]>([]);
   const [useExistingTracking,setUseExistingTracking]=useState(true);
-  const [manualFpsDraft,setManualFpsDraft]=useState('30');
   const [hasAnalyzed,setHasAnalyzed]=useState<boolean>(false);
   const [isAnalyzing,setIsAnalyzing]=useState<boolean>(false);
   const [analysisProgress,setAnalysisProgress]=useState<number>(0);
@@ -108,6 +107,21 @@ export default function App() {
   const [,setConfidenceScores]=useState<UnifiedConfidenceScores|null>(null);
   const [videoQuality,setVideoQuality]=useState<VideoQualityAssessment|null>(null);
 
+  // Video page: original video (with detected-ball overlay) or the 2D animation
+  const [viewTab,setViewTab]=useState<'video'|'twod'>('video');
+  useEffect(()=>setViewTab('video'),[userVideoUrl]);
+
+  // "Tap the ball" assist (only when the program could not find a reliable ball track)
+  const [assistStage,setAssistStage]=useState<1|2|null>(null);
+  const [assistNote,setAssistNote]=useState<string|null>(null);
+  const assistFrames=useRef<{first:number;second:number}>({first:0,second:0});
+  const assistFirst=useRef<NonNullable<ManualAnchorInput['point1']>|null>(null);
+  const pendingOutcome=useRef<AnalysisOutcomeDone|null>(null);
+
+  // FPS question (only when the container timing cannot be read)
+  const [fpsDialogOpen,setFpsDialogOpen]=useState(false);
+  const [fpsError,setFpsError]=useState<string|null>(null);
+
   // Modals (database and Python source are fetched on demand)
   const [isDbModalOpen,setIsDbModalOpen]=useState<boolean>(false);
   const [database,setDatabase]=useState<PitchRecord[]|null>(null);
@@ -118,12 +132,13 @@ export default function App() {
   const busy=isAnalyzing||isAutoDetectingFrames;
 
   const sourceTimesValid=useMemo(()=>hasUsableSourceTimes(videoTiming),[videoTiming]);
+  const needFps=Boolean(isVideoLoaded&&videoTiming&&!sourceTimesValid);
   const analysisHasSourceFrames=sourceTimesValid&&!eventView?.eventOnly;
   // Count only enumerated original PTS, never the legacy event-only bridge.
   const originalFlightFrames=sourceTimesValid&&videoTiming?.timeBase==='timestamp'&&events.release&&events.glove
     ?videoTiming.timestamps.filter(t=>t>=events.release!.timeSec&&t<=events.glove!.timeSec).length:null;
   const analysisFps=analysisHasSourceFrames?videoFps:0; // 0 means unknown; event slots supply exact seconds.
-  const analysisBlockReason=manualAnalysisReason(isVideoLoaded,isAnalyzing,isAutoDetectingFrames,videoTiming,releaseFrame,gloveFrame,sourceTimesValid,events)||(eventView?null:'請在「標記」步驟設定出手與進手套時間。');
+  const analysisBlockReason=manualAnalysisReason(isVideoLoaded,isAnalyzing,isAutoDetectingFrames,videoTiming,releaseFrame,gloveFrame,sourceTimesValid,events)||(eventView?null:'請先標記出手與進手套。');
   useEffect(()=>{analysisInputGeneration.current++;setHasAnalyzed(false);},[selectedPitchType,cameraViewMode,biometrics,strictPitchTypeMode,allowCrossTypeFallback,events,videoTiming,userVideoUrl]);
 
   useEffect(()=>()=>{
@@ -131,28 +146,14 @@ export default function App() {
     if(activeObjectUrlRef.current){VideoLoadService.revokePreviousObjectUrl(activeObjectUrlRef.current);activeObjectUrlRef.current=null;}
   },[]);
 
+  const fullscreen=step==='mark'||step==='assist';
+  useEffect(()=>{document.body.style.overflow=fullscreen?'hidden':'';return()=>{document.body.style.overflow='';};},[fullscreen]);
+
   const resetForNewVideo=()=>{
     setVideoFps(NaN);setTotalVideoFrames(0);setVideoFileName('');setCurrentVideoFrame(0);setTargetFrameSeek(null);setVisibleEndFrame(0);
-    setEvents({release:null,glove:null});setAnalyzedEvents(null);setCompletedResult(null);setCompletedVelocity(null);setCurrentViewKind('original');setUserVideoUrl(null);setVideoTiming(null);setCameraGeometry(null);setReferencePoints([null,null,null,null]);setReferenceConfirmed(false);
-    setHasAnalyzed(false);setAiDetection(null);setAutoDetectResult(null);setVideoTrack([]);setVideoMetrics(null);setConfidenceScores(null);setManualAnchor(null);setIsSelectingPoint(null);
-  };
-
-  // Built-in 60fps demo entry (kept from V3; the sample file is not shipped).
-  const handleLoadDemoVideo=async()=>{
-    try{
-      const response=await fetch('/demo_pitch_sample.mp4',{method:'HEAD'});
-      if(!response.ok||!response.headers.get('content-type')?.startsWith('video/'))throw new Error('原始 V3 ZIP 未附 demo_pitch_sample.mp4，請選擇自己的投球影片。示範入口保留，補入原始影片後即可使用。');
-    }catch(error){setVideoLoadError(error instanceof Error?error.message:'示範影片讀取失敗，請上傳影片。');return;}
-    if(activeObjectUrlRef.current){VideoLoadService.revokePreviousObjectUrl(activeObjectUrlRef.current);activeObjectUrlRef.current=null;}
-    const defaultTotal=392,demoFps=60,demoDuration=6.53;
-    const demoTimestamps=Array.from({length:defaultTotal},(_,i)=>Number((i/demoFps).toFixed(5)));
-    resetForNewVideo();
-    setVideoLoadError(null);setVideoLoadStatus('ready');setTotalVideoFrames(defaultTotal);setVideoFps(demoFps);
-    setVideoTiming({durationSec:demoDuration,timeBase:'fps_derived',actualFps:demoFps,fpsSource:'container_metadata',isVFR:false,totalFrames:defaultTotal,timestamps:demoTimestamps,width:1280,height:720});
-    setVideoFileName('內建 60fps 投球示範短片 (392 影格)');setUserVideoUrl('demo_pitch_sample.mp4');
-    setVideoQuality({fps:demoFps,exposureQuality:'good',cameraStabilityScore:85,backgroundComplexity:'moderate',resolution:'1280x720',isResolutionAdequate:true,motionBlurRisk:'low',expectedBallPixelSize:10,qualityScore:92,warnings:[]});
-    setEvents({release:selectEvent(describePosition(demoTimestamps,demoTimestamps[102],true),demoTimestamps),glove:selectEvent(describePosition(demoTimestamps,demoTimestamps[145],true),demoTimestamps)});
-    setVisibleEndFrame(145);setCurrentVideoFrame(102);setTargetFrameSeek(102);
+    setEvents({release:null,glove:null});setAnalyzedEvents(null);setCompletedResult(null);setCompletedVelocity(null);setDetections([]);setCurrentViewKind('original');setUserVideoUrl(null);setVideoTiming(null);setCameraGeometry(null);
+    setHasAnalyzed(false);setAiDetection(null);setAutoDetectResult(null);setVideoTrack([]);setVideoMetrics(null);setConfidenceScores(null);setManualAnchor(null);
+    setAssistStage(null);setAssistNote(null);pendingOutcome.current=null;assistFirst.current=null;setFpsDialogOpen(false);setFpsError(null);
   };
 
   // 統一 Video Loading Controller：同一支檔案重選也能觸發
@@ -170,7 +171,7 @@ export default function App() {
       activeObjectUrlRef.current=loadResult.objectUrl;
       setVideoFileName(loadResult.fileName);
       setTotalVideoFrames(loadResult.totalFrames);
-      setVideoFps(loadResult.actualFps);setManualFpsDraft(Number.isFinite(loadResult.actualFps)?String(loadResult.actualFps):'');
+      setVideoFps(loadResult.actualFps);
       setVideoTiming({...loadResult.timing,durationSec:loadResult.durationSec,timeBase:loadResult.timing.timeBase,actualFps:loadResult.actualFps,fpsSource:loadResult.fpsSource,isVFR:loadResult.isVFR,totalFrames:loadResult.totalFrames,timestamps:loadResult.timestamps,width:loadResult.width,height:loadResult.height});
       setVideoQuality(loadResult.qualityAssessment);
       setEvents({release:null,glove:null});
@@ -186,19 +187,25 @@ export default function App() {
     }
   };
 
-  const confirmManualFps=()=>{
+  // The user states the real shooting FPS (CFR assumption); nothing is guessed on their behalf.
+  const pickFps=(fps:number)=>{
     if(!videoTiming)return;
     try{
-      const confirmed=confirmCfrTiming(videoTiming,Number(manualFpsDraft),events);
+      const confirmed=confirmCfrTiming(videoTiming,fps,events);
       setVideoTiming(confirmed.timing);setVideoFps(confirmed.timing.actualFps);setTotalVideoFrames(confirmed.timing.totalFrames);
       setEvents(confirmed.events);setVisibleEndFrame(confirmed.events.glove?.right??0);
-      setManualAnchor(null);setIsSelectingPoint(null);setAiDetection(null);setAutoDetectResult(null);
-      setVideoTrack([]);setVideoMetrics(null);setConfidenceScores(null);setAnalyzedEvents(null);setCompletedResult(null);
+      setManualAnchor(null);setAiDetection(null);setAutoDetectResult(null);
+      setVideoTrack([]);setVideoMetrics(null);setConfidenceScores(null);setAnalyzedEvents(null);setCompletedResult(null);setDetections([]);
       const cursor=videoElementRef.current?.currentTime??0;
       const frame=describePosition(confirmed.timing.timestamps,Math.min(cursor,confirmed.timing.timestamps.at(-1)!),true).left;
       setTargetFrameSeek(frame);setCurrentVideoFrame(frame);setCurrentViewKind('cfr_assumed');
-      setHasAnalyzed(false);setVideoLoadError(null);
-    }catch(error){setVideoLoadError(error instanceof Error?error.message:'FPS 確認失敗，請檢查時間資訊。');}
+      setHasAnalyzed(false);setVideoLoadError(null);setFpsError(null);setFpsDialogOpen(false);
+    }catch(error){setFpsError(error instanceof Error?error.message:'FPS 確認失敗，請檢查影片。');}
+  };
+  const cancelFps=()=>{
+    videoLoadGeneration.current++;
+    if(activeObjectUrlRef.current){VideoLoadService.revokePreviousObjectUrl(activeObjectUrlRef.current);activeObjectUrlRef.current=null;}
+    resetForNewVideo();setVideoLoadStatus('idle');setStep('video');
   };
 
   // AI 自動搜尋出手 / 進手套 (Coarse-to-Fine 視覺影格掃描；引擎按需載入)
@@ -240,16 +247,25 @@ export default function App() {
   };
   const stopAutoDetect=()=>{autoGeneration.current++;setIsAutoDetectingFrames(false);videoElementRef.current?.pause();};
 
+  const commitOutcome=(outcome:AnalysisOutcomeDone,ranEvents:SelectedEvents)=>{
+    setCompletedResult(outcome.result);setCompletedVelocity({velocityKmh:outcome.velocityKmh,flightSeconds:outcome.flightSeconds,flightFrames:outcome.flightFrames});
+    setDetections(outcome.detections);setAnalyzedEvents(ranEvents);
+    setAnalysisProgress(100);setHasAnalyzed(true);setAssistStage(null);setAssistNote(null);pendingOutcome.current=null;
+    setStep('result');
+  };
+  const seekTo=(frame:number)=>{setTargetFrameSeek(null);requestAnimationFrame(()=>{setTargetFrameSeek(frame);setCurrentVideoFrame(frame);});};
+
   // 啟動分析：按下時才載入「matchingEngine＋資料庫」分析 chunk
-  const handleStartAnalysis=async()=>{
+  const handleStartAnalysis=async(anchorOverride?:ManualAnchorInput|null)=>{
     if(analysisBlockReason){setVideoLoadError(analysisBlockReason);return;}
-    const inputGeneration=analysisInputGeneration.current;
+    const anchor=anchorOverride!==undefined?anchorOverride:manualAnchor;
+    const inputGeneration=analysisInputGeneration.current,ranEvents=events;
     setVideoLoadError(null);setHasAnalyzed(false);
     setIsAnalyzing(true);
     videoElementRef.current?.pause();
     try{
       setAnalysisProgress(3);
-      let runtime;
+      let runtime:AnalysisRuntime;
       try{
         setEngineState('loading');setAnalysisStepText('載入分析引擎與 1,080 筆參考資料庫（首次約 1 MB，之後使用快取）...');
         runtime=await loadAnalysisRuntime();
@@ -262,7 +278,7 @@ export default function App() {
       const outcome=await runtime.runPitchAnalysis({
         videoElement:videoElementRef.current,events,eventView:eventView!,videoTiming,videoFps,totalVideoFrames,
         sourceTimesValid,analysisHasSourceFrames,analysisFps,analysisDistance,releaseFrame,gloveFrame,visibleEndFrame,originalFlightFrames,
-        selectedPitchType,cameraViewMode,biometrics,strictPitchTypeMode,allowCrossTypeFallback,manualAnchor,cameraGeometry,useExistingTracking,
+        selectedPitchType,cameraViewMode,biometrics,strictPitchTypeMode,allowCrossTypeFallback,manualAnchor:anchor,cameraGeometry,useExistingTracking,
         hasAiDetection:Boolean(aiDetection),autoDetectConfidence:autoDetectResult?.confidence,isCancelled
       },{
         onProgress:(pct,text)=>{if(isCancelled())return;setAnalysisProgress(pct);setAnalysisStepText(text);},
@@ -273,17 +289,46 @@ export default function App() {
         onAiDetection:setAiDetection
       });
       if(outcome.status==='stale'){if(outcome.message)setVideoLoadError(outcome.message);return;}
-      setCompletedResult(outcome.result);setCompletedVelocity({velocityKmh:outcome.velocityKmh,flightSeconds:outcome.flightSeconds,flightFrames:outcome.flightFrames});setAnalyzedEvents(events);
-      setAnalysisProgress(100);
-      setHasAnalyzed(true);
-      setStep('result');
+      // Ask for one tap only when tracking ran but found no reliable ball, and no tap was given yet.
+      const reliable=Boolean(outcome.result.projection_match?.used&&outcome.result.video_track_status==='VALID_TRACK');
+      const alreadyAssisted=Boolean(anchor?.point1&&anchor?.point2);
+      if(!reliable&&outcome.trackingRan&&!alreadyAssisted&&videoTiming?.timestamps.length&&events.release&&events.glove){
+        const times=videoTiming.timestamps,rel=sourceIndexAt(times,events.release.timeSec),glo=sourceIndexAt(times,events.glove.timeSec);
+        const first=Math.min(rel+2,Math.max(rel,glo-1)),second=Math.max(first+1,glo-2);
+        assistFrames.current={first,second};assistFirst.current=null;pendingOutcome.current=outcome;
+        setAssistNote(null);setAssistStage(1);setStep('assist');seekTo(first);
+        return;
+      }
+      commitOutcome(outcome,ranEvents);
       requestAnimationFrame(()=>window.scrollTo({top:0}));
     }catch(error){
       setVideoLoadError(error instanceof Error?error.message:'分析失敗，請確認影格與影片');
     }finally{setIsAnalyzing(false);}
   };
 
+  const handleAssistTap=(x:number,y:number)=>{
+    const frame=currentVideoFrame;
+    if(assistStage===1){
+      const first={frame,x_norm:x,y_norm:y};assistFirst.current=first;
+      setManualAnchor({point1:first,point2:undefined});setAssistStage(2);setAssistNote(null);seekTo(assistFrames.current.second);
+    }else if(assistStage===2){
+      const first=assistFirst.current;
+      if(!first||frame<=first.frame){setAssistNote('請換到比剛才更後面的畫面，再點一下球。');return;}
+      const anchor:ManualAnchorInput={point1:first,point2:{frame,x_norm:x,y_norm:y}};
+      setManualAnchor(anchor);setAssistStage(null);setAssistNote(null);setStep('analyze');
+      void handleStartAnalysis(anchor);
+    }
+  };
+  const skipAssist=()=>{if(pendingOutcome.current)commitOutcome(pendingOutcome.current,events);else setStep('result');};
+
   const matchedResult=hasAnalyzed?completedResult:null;
+
+  // Detected-ball overlay for the video page (display only; shown only for an up-to-date analysis)
+  const overlay=useMemo(()=>{
+    if(!hasAnalyzed||!completedResult)return null;
+    const pick=(p:{frame:number;timestamp:number;x_norm:number;y_norm:number}):OverlayPoint=>({frame:p.frame,timestamp:p.timestamp,x_norm:p.x_norm,y_norm:p.y_norm});
+    return {observed:detections.map(pick),estimated:(completedResult.video_track??[]).filter(p=>p.source!=='vision').map(pick)};
+  },[hasAnalyzed,completedResult,detections]);
 
   const handleResetToAiFrames=()=>{
     if(aiDetection&&aiDetection.releaseFrame>0&&aiDetection.gloveFrame>aiDetection.releaseFrame){
@@ -292,12 +337,6 @@ export default function App() {
     }
   };
   const handleSeekVideoFrame=(frame:number)=>{setTargetFrameSeek(frame);setCurrentVideoFrame(frame);};
-
-  const handleSetAnchorPoint=(pointIdx:1|2,xNorm:number,yNorm:number)=>{
-    const f=currentVideoFrame;
-    setManualAnchor(prev=>pointIdx===1?{point1:{frame:f,x_norm:xNorm,y_norm:yNorm},point2:prev?.point2}:{point1:prev?.point1,point2:{frame:f,x_norm:xNorm,y_norm:yNorm}});
-    setIsSelectingPoint(null);
-  };
 
   const openDatabase=async()=>{
     setIsDbModalOpen(true);
@@ -311,53 +350,54 @@ export default function App() {
     try{setPythonSource((await import('./appPyCode')).APP_PY_CODE);}catch{setIsCodeModalOpen(false);setVideoLoadError('原始碼載入失敗，請確認連線後再試。');}
   };
 
-  const isFpsEstimated=videoTiming?.fpsSource==='estimated';
   const loadingVideo=videoLoadStatus==='uploading'||videoLoadStatus==='processing_metadata';
   const bothEvents=Boolean(events.release&&events.glove);
-  const reachable:Record<Step,boolean>={video:true,mark:isVideoLoaded,analyze:isVideoLoaded&&bothEvents,result:hasAnalyzed};
-  const go=(next:Step)=>{if(!reachable[next]||busy)return;setStep(next);requestAnimationFrame(()=>window.scrollTo({top:0}));};
-  const showPlayer=Boolean(userVideoUrl)&&(step==='mark'||step==='analyze');
+  const reachable:Record<NavStep,boolean>={video:true,mark:isVideoLoaded,analyze:isVideoLoaded&&bothEvents,result:hasAnalyzed};
+  const go=(next:NavStep)=>{if(!reachable[next]||busy)return;setStep(next);requestAnimationFrame(()=>window.scrollTo({top:0}));};
   const flightSecondsPreview=events.release&&events.glove?events.glove.timeSec-events.release.timeSec:null;
+  const navStep:NavStep=step==='assist'?'analyze':step;
+  const playerVariant=fullscreen?'fullscreen':step==='result'?'inline':'compact';
+  const showPlayer=Boolean(userVideoUrl)&&(step==='mark'||step==='assist'||step==='analyze'||step==='result');
+  const showTwoD=viewTab==='twod'&&(step==='mark'||step==='result');
 
   const viewButton=(mode:CameraViewMode,label:string,hint:string)=><button type="button" id={`view-${mode}`} aria-pressed={cameraViewMode===mode} disabled={busy} onClick={()=>setCameraViewMode(mode)} className={`choice ${cameraViewMode===mode?'choice-active':''}`}><span className="font-bold">{label}</span><span className="text-xs text-slate-400">{hint}</span></button>;
+  const viewToggle=<div role="tablist" aria-label="影片與2D動畫" className="grid grid-cols-2 gap-2">
+    <button type="button" role="tab" id="view-tab-video" aria-selected={viewTab==='video'} onClick={()=>setViewTab('video')} className={`mode-toggle ${viewTab==='video'?'mode-active':''}`}>影片</button>
+    <button type="button" role="tab" id="view-tab-twod" aria-selected={viewTab==='twod'} onClick={()=>{videoElementRef.current?.pause();setViewTab('twod');}} className={`mode-toggle ${viewTab==='twod'?'mode-active':''}`}>2D 動畫</button>
+  </div>;
+  const twoD=<div className="space-y-2">
+    {!matchedResult&&<p className="text-xs text-amber-200 card">還沒有分析結果：完成分析後，這裡會播放勝出候選的 2D 投球動畫。</p>}
+    <PitchVisualizer result={matchedResult} active={showTwoD}/>
+  </div>;
 
   return (
     <div className="app-shell min-h-dvh bg-slate-950 text-slate-100 font-sans">
-      <header className="sticky top-0 z-30 bg-slate-950/95 backdrop-blur border-b border-slate-800">
+      {!fullscreen&&<header className="sticky top-0 z-30 bg-slate-950/95 backdrop-blur border-b border-slate-800">
         <div className="mx-auto max-w-[480px] px-4 pt-3 pb-2 flex items-center justify-between gap-2">
           <div className="min-w-0">
             <h1 className="text-base font-black tracking-tight text-white">PitchVision <span className="text-cyan-300">手機版</span></h1>
-            <p className="text-[11px] text-slate-400 truncate">V4.7 引擎 · 全部在本機執行，影片不上傳</p>
+            <p className="text-[11px] text-slate-400 truncate">影片只在本機處理，不上傳</p>
           </div>
           <button id="btn-science-info" type="button" onClick={()=>setScienceOpen(true)} className="icon-btn" aria-label="科學資訊"><FlaskConical size={20}/><span className="text-xs">科學資訊</span></button>
         </div>
-        <StepNav step={step} reachable={reachable} busy={busy} onSelect={go}/>
-      </header>
+        <StepNav step={navStep} reachable={reachable} busy={busy} onSelect={go}/>
+      </header>}
 
-      <main className="mx-auto max-w-[480px] px-4 pt-4 pb-36 space-y-4">
-        {videoLoadError&&<div id="app-error" role="alert" className="p-3 rounded-xl bg-rose-950/60 border border-rose-500/50 text-sm text-rose-100 flex gap-2"><AlertTriangle className="w-5 h-5 text-rose-400 shrink-0"/><span className="min-w-0 break-words">{videoLoadError}</span></div>}
+      <main className={fullscreen?'':'mx-auto max-w-[480px] px-4 pt-4 pb-36 space-y-4'}>
+        {videoLoadError&&<div id="app-error" role="alert" className={`p-3 rounded-xl bg-rose-950/90 border border-rose-500/50 text-sm text-rose-100 flex gap-2 ${fullscreen?'fixed top-16 left-3 right-3 z-[46]':''}`}><AlertTriangle className="w-5 h-5 text-rose-400 shrink-0"/><span className="min-w-0 break-words">{videoLoadError}</span></div>}
 
         {/* ── Step 1：選影片 ───────────────────────────── */}
         {step==='video'&&<section id="screen-video" aria-labelledby="h-video" className="space-y-4">
           <h2 id="h-video" className="screen-title">1. 選擇投球影片</h2>
           <label htmlFor="video-upload-input" className={`picker ${loadingVideo||busy?'opacity-60':''}`}>
             <input id="video-upload-input" aria-label="選擇投球影片" disabled={busy||loadingVideo} type="file" accept="video/mp4,video/quicktime,video/mov,video/webm,video/*" onChange={handleFileUpload} className="sr-only"/>
-            {loadingVideo?<><Loader2 className="w-7 h-7 text-cyan-300 animate-spin"/><span className="font-bold text-cyan-200">{videoLoadStatus==='uploading'?'正在開啟影片...':'正在讀取 FPS 與時間戳...'}</span></>
-            :<><UploadCloud className="w-7 h-7 text-blue-300"/><span className="font-bold">{isVideoLoaded?'換一支影片':'從相簿或檔案選擇影片'}</span><span className="text-xs text-slate-400">MP4 / MOV / WebM · 24–240 FPS · 影片只在本機處理</span></>}
+            {loadingVideo?<><Loader2 className="w-7 h-7 text-cyan-300 animate-spin"/><span className="font-bold text-cyan-200">{videoLoadStatus==='uploading'?'正在開啟影片...':'正在讀取影片資訊...'}</span></>
+            :<><UploadCloud className="w-7 h-7 text-blue-300"/><span className="font-bold">{isVideoLoaded?'換一支影片':'從相簿或檔案選擇影片'}</span><span className="text-xs text-slate-400">MP4 / MOV / WebM · 影片只在本機處理</span></>}
           </label>
-          <button id="btn-load-demo-video" type="button" disabled={busy||loadingVideo} onClick={handleLoadDemoVideo} className="link-btn"><Sparkles className="w-4 h-4"/>載入 60fps 範例影片（需另行放入範例檔）</button>
 
-          {isVideoLoaded&&<div id="video-summary" className="card space-y-2">
+          {isVideoLoaded&&<div id="video-summary" className="card">
             <p className="text-sm text-emerald-300 flex items-start gap-2"><CheckCircle className="w-5 h-5 shrink-0"/><span className="min-w-0 break-all">已就緒：{videoFileName}</span></p>
-            <dl className="grid grid-cols-2 gap-2 text-sm">
-              <div className="stat"><dt>FPS</dt><dd>{formatSourceFps(videoFps)}{isFpsEstimated&&<span className="text-amber-300 text-xs"> 估計</span>}{videoTiming?.isVFR&&<span className="text-amber-300 text-xs"> VFR</span>}</dd></div>
-              <div className="stat"><dt>{videoTiming?.timeBase==='timestamp'?'來源影格':'時間位置'}</dt><dd>{totalVideoFrames}</dd></div>
-            </dl>
-          </div>}
-          {videoTiming&&<div id="timing-status" className="card text-sm space-y-2">
-            <p className={sourceTimesValid?'text-cyan-200':'text-amber-200'}>{sourceTimesValid?`FPS ${formatSourceFps(videoFps)} · ${videoTiming.timeBase==='timestamp'?'已確認':'使用者確認（CFR假設）'}`:'來源 FPS／PTS 未確認；可使用手動事件秒數分析。補幀與來源影格追蹤仍需時間資料。'}</p>
-            {!sourceTimesValid&&<div className="flex items-end gap-2"><label className="flex-1 text-xs text-slate-300">指定可信 FPS（CFR 假設）<input id="manual-fps" className="field mt-1" type="number" inputMode="decimal" min="1" max="1000" step="0.001" value={manualFpsDraft} onChange={e=>setManualFpsDraft(e.target.value)}/></label><button id="confirm-manual-fps" type="button" disabled={busy} onClick={confirmManualFps} className="btn-secondary">確認 FPS</button></div>}
-            <details className="text-slate-400 text-xs"><summary>進階時間資訊</summary><p className="mt-2 break-words">來源：{videoTiming.fpsSource} · {videoTiming.isVFR?'VFR':'CFR'} · 時間基準：{videoTiming.timeBase} · {videoTiming.timingReliable?'時間表已取得':'時間未確認'} · 來源位置數：{videoTiming.timestamps.length}</p><p className="break-words">{videoTiming.timingWarning}</p></details>
+            {sourceTimesValid&&<p id="video-info" className="text-xs text-slate-400 mt-1">{Number(videoFps.toFixed(2))} FPS · {totalVideoFrames} {videoTiming?.timeBase==='timestamp'?'格':'個時間位置'}{videoTiming?.isVFR?' · 變動幀率':''}</p>}
           </div>}
 
           <div className="card space-y-3">
@@ -373,17 +413,16 @@ export default function App() {
             <select id="pitch-type-select" value={selectedPitchType} disabled={busy} onChange={e=>setSelectedPitchType(e.target.value)} className="field">
               {PITCH_TYPE_OPTIONS.map(opt=><option key={opt} value={opt}>{opt}</option>)}
             </select>
-            <p className="text-xs text-slate-400">資料庫第一級過濾條件；不確定時選「AI 全數據庫自動辨識」。</p>
+            <p className="text-xs text-slate-400">預設由程式在整個資料庫自動辨識；知道球種時可指定，比對會更聚焦。</p>
           </div>
           {videoQuality&&<details className="card"><summary className="card-title">影片品質評估</summary><div className="mt-3"><VideoQualityCard assessment={videoQuality} videoFileName={videoFileName} actualFps={videoFps}/></div></details>}
         </section>}
 
-        {/* ── 播放器：標記與分析時都保持顯示（追蹤需要已呈現的 video 元素）─── */}
-        {userVideoUrl&&<section id="player-section" hidden={!showPlayer} aria-label="投球影片播放器" className="space-y-3">
-          {step==='mark'&&<h2 className="screen-title">2. 標記出手與進手套</h2>}
-          {step==='mark'&&<p className="text-xs text-slate-400">逐格移動到球離手那一格按「設為出手」，到球進手套那一格按「設為進手套」。低於 90 FPS 可切到「90 FPS 補幀」協助選時間；補幀畫面是推算，不算球的觀測。</p>}
+        {/* ── Player：標記（全螢幕）／分析（縮小）／結果（內嵌）共用同一個 video 元素 ─── */}
+        {userVideoUrl&&<section id="player-section" hidden={!showPlayer} aria-label="投球影片" className={playerVariant==='fullscreen'?'player-fixed':'space-y-3'}>
+          {step==='result'&&viewToggle}
           <PitchVideoPlayer
-            compact={step==='analyze'}
+            variant={playerVariant}
             videoUrl={userVideoUrl}
             releaseFrame={releaseFrame}
             gloveFrame={gloveFrame}
@@ -392,7 +431,6 @@ export default function App() {
             timestamps={controlTimes}
             selectionOnly={selectionOnly}
             timestampsArePreviewPositions={selectionOnly}
-            isFpsEstimated={isFpsEstimated}
             viewMode={cameraViewMode}
             pitchName={selectedPitchType}
             hasAnalyzed={hasAnalyzed}
@@ -405,30 +443,31 @@ export default function App() {
             onPositionChange={point=>setCurrentViewKind(point.kind)}
             spatialCalibration={matchedResult?.spatial_calibration}
             onVideoElementReady={el=>{videoElementRef.current=el;}}
-            isSelectingPoint={referenceSelection!==null?1:isSelectingPoint}
-            onSelectCoordinate={(x,y)=>{
-              if(currentViewKind==='interpolated')return;
-              if(referenceSelection!==null){setReferencePoints(prev=>prev.map((p,i)=>i===referenceSelection?{x,y}:p));setReferenceSelection(null);return;}
-              if(isSelectingPoint)handleSetAnchorPoint(isSelectingPoint,x,y);
+            onTimeBaseOffset={offset=>{
+              // Rebase the parsed container times onto the browser's own media timeline (once, before any marking).
+              setVideoTiming(prev=>prev&&prev.timeBase==='timestamp'?{...prev,timestamps:prev.timestamps.map(t=>Math.max(0,t+offset)),timingWarning:`${prev.timingWarning??''} 起點已依瀏覽器實際呈現時間校正 ${offset.toFixed(4)} 秒。`.trim()}:prev);
             }}
-            manualPoint1={manualAnchor?.point1||null}
-            manualPoint2={manualAnchor?.point2||null}
+            isSelectingPoint={assistStage}
+            onSelectCoordinate={(x,y)=>{if(currentViewKind==='interpolated')return;if(assistStage)handleAssistTap(x,y);}}
+            manualPoint1={step==='assist'?manualAnchor?.point1||null:null}
+            manualPoint2={null}
+            overlay={overlay}
+            twoD={twoD}
+            showTwoD={showTwoD}
+            viewToggle={step==='mark'?viewToggle:undefined}
+            onBack={step==='mark'?()=>go('video'):undefined}
+            onNext={step==='mark'?()=>go('analyze'):undefined}
+            assist={step==='assist'?{text:assistStage===2?'請在這一格再點一下球':'找不到球。請在這一格點一下球',onSkip:skipAssist}:null}
+            menuExtra={step==='mark'?<>
+              {isVideoLoaded&&<AutoDetectPanel
+                canRun={Boolean(videoTiming?.timingReliable)} busy={busy} running={isAutoDetectingFrames} progress={autoDetectProgress} stageText={autoDetectStageText}
+                result={autoDetectResult} canAdopt={Boolean(aiDetection&&aiDetection.status!=='AUTO_DETECTION_FAILED')}
+                onRun={handleAiAutoDetectFrames} onStop={stopAutoDetect} onAdopt={handleResetToAiFrames} onSeek={handleSeekVideoFrame}/>}
+              <button type="button" id="btn-science-info-menu" onClick={()=>setScienceOpen(true)} className="btn-secondary"><FlaskConical size={18}/>科學資訊</button>
+            </>:undefined}
           />
-          {step==='mark'&&(isSelectingPoint||referenceSelection!==null)&&<p role="status" className="text-sm text-cyan-200 card">請點一下影片畫面中的{referenceSelection!==null?`幾何角點 ${referenceSelection+1}`:`球位置 ${isSelectingPoint}`}。</p>}
-          {step==='mark'&&isVideoLoaded&&<AutoDetectPanel
-            canRun={Boolean(videoTiming?.timingReliable)} busy={busy} running={isAutoDetectingFrames} progress={autoDetectProgress} stageText={autoDetectStageText}
-            result={autoDetectResult} canAdopt={Boolean(aiDetection&&aiDetection.status!=='AUTO_DETECTION_FAILED')}
-            onRun={handleAiAutoDetectFrames} onStop={stopAutoDetect} onAdopt={handleResetToAiFrames} onSeek={handleSeekVideoFrame}/>}
-          {step==='mark'&&isVideoLoaded&&<CalibrationPanel
-            disabled={busy} interpolated={currentViewKind==='interpolated'} currentFrame={currentVideoFrame}
-            manualAnchor={manualAnchor} onSelectAnchor={setIsSelectingPoint} onClearAnchors={()=>{setManualAnchor(null);setIsSelectingPoint(null);}}
-            visibleEndFrame={visibleEndFrame} releaseFrame={releaseFrame} totalFrames={totalVideoFrames} onVisibleEndFrame={setVisibleEndFrame}
-            referencePoints={referencePoints} onSelectReference={setReferenceSelection}
-            referenceWidth={referenceWidth} onReferenceWidth={setReferenceWidth} referenceLength={referenceLength} onReferenceLength={setReferenceLength}
-            referenceFocal={referenceFocal} onReferenceFocal={setReferenceFocal} referenceConfirmed={referenceConfirmed} onReferenceConfirmed={setReferenceConfirmed}
-            cameraGeometry={cameraGeometry}
-            onApply={()=>{try{const v=videoElementRef.current!;setCameraGeometry(calibrateGroundReference(v.videoWidth,v.videoHeight,{points:referencePoints as ImagePoint[],widthM:referenceWidth,lengthM:referenceLength,focalPx:referenceFocal}));setHasAnalyzed(false);}catch(e){setVideoLoadError(e instanceof Error?e.message:'標定失敗');}}}
-            onClear={()=>{setCameraGeometry(null);setHasAnalyzed(false);setReferenceConfirmed(false);setReferencePoints([null,null,null,null]);}}/>}
+          {step==='assist'&&assistNote&&<p id="assist-note" role="status" className="assist-note">{assistNote}</p>}
+          {step==='mark'&&<p className="sr-only">逐格移動到球離手那一格按「標記出手」，到球進手套那一格按「標記進手套」。</p>}
         </section>}
 
         {/* ── Step 3：分析 ───────────────────────────── */}
@@ -460,10 +499,6 @@ export default function App() {
           <h2 id="h-result" className="screen-title">4. 分析結果</h2>
           <ResultCards result={matchedResult} averageVelocityKmh={completedVelocity?.velocityKmh??matchedResult.velocity_kmh} flightSeconds={completedVelocity?.flightSeconds??matchedResult.flight_time_sec} distanceM={analysisDistance}/>
           {analyzedEvents&&<p id="event-time-provenance" data-engine-flight-seconds={matchedResult.flight_time_sec} data-events={JSON.stringify(analyzedEvents)} className="text-xs text-amber-200 card">出手 {analyzedEvents.release?.timeSec.toFixed(6)}s（{analyzedEvents.release?.kind==='interpolated'?'推算':!sourceTimesValid?'媒體時間':analyzedEvents.release?.kind==='cfr_assumed'?'CFR假設':'原始'}）→進手套 {analyzedEvents.glove?.timeSec.toFixed(6)}s（{analyzedEvents.glove?.kind==='interpolated'?'推算':!sourceTimesValid?'媒體時間':analyzedEvents.glove?.kind==='cfr_assumed'?'CFR假設':'原始'}）。事件精度仍受原始間距 {(sourceTimesValid?Math.max(analyzedEvents.release?.sourceSpanSec||0,analyzedEvents.glove?.sourceSpanSec||0).toFixed(4):'未知')}s 與遮蔽限制；補幀不增加真觀測或旋轉量測精度。</p>}
-          <div className="card space-y-2">
-            <h3 className="card-title">投球動畫</h3>
-            <PitchVisualizer result={matchedResult} active={step==='result'}/>
-          </div>
           <details id="full-metrics" className="card"><summary className="card-title">完整數據與反查依據</summary>
             <div className="mt-3"><MetricsPanel compact result={matchedResult} matchedResult={matchedResult} calcVelocity={completedVelocity?.velocityKmh} flightSeconds={completedVelocity?.flightSeconds} flightFrames={completedVelocity?.flightFrames} standardDistance={STANDARD_GLOVE_DISTANCE_METERS}/></div>
           </details>
@@ -471,26 +506,25 @@ export default function App() {
         </section>}
       </main>
 
-      {/* ── 底部單手操作列 ───────────────────────────── */}
-      <nav aria-label="主要操作" className="action-bar">
+      {/* ── 底部單手操作列（標記與補點畫面是全螢幕，不顯示）─── */}
+      {!fullscreen&&<nav aria-label="主要操作" className="action-bar">
         <div className="mx-auto max-w-[480px] px-4 py-3 space-y-2">
-          {step==='video'&&<button id="btn-next-mark" type="button" className="btn-primary" disabled={!reachable.mark||busy} onClick={()=>go('mark')}>{isVideoLoaded?<>下一步：標記出手與進手套<ChevronRight size={20}/></>:'請先選擇影片'}</button>}
-          {step==='mark'&&<>
-            <p id="mark-status" className="text-xs text-center text-slate-300">{events.release?'✓ 出手':'○ 出手'} · {events.glove?'✓ 進手套':'○ 進手套'}{flightSecondsPreview!==null&&flightSecondsPreview>0?` · 飛行 ${flightSecondsPreview.toFixed(4)} 秒`:''}</p>
-            <button id="btn-next-analyze" type="button" className="btn-primary" disabled={!reachable.analyze||busy} onClick={()=>go('analyze')}>{bothEvents?<>下一步：確認設定<ChevronRight size={20}/></>:'請標記出手與進手套'}</button>
-          </>}
+          {step==='video'&&<button id="btn-next-mark" type="button" className="btn-primary" disabled={!reachable.mark||busy||needFps} onClick={()=>go('mark')}>{isVideoLoaded?<>下一步：標記出手與進手套<ChevronRight size={20}/></>:'請先選擇影片'}</button>}
           {step==='analyze'&&<>
             <p id="analysis-readiness" role="status" className="text-xs text-center text-amber-200">{analysisBlockReason||(hasAnalyzed?'分析已完成，可修改事件後重新分析。':'手動時間設定可分析；不需執行自動辨識。')}</p>
-            <button id="btn-start-analysis" type="button" className="btn-primary" onClick={handleStartAnalysis} disabled={Boolean(analysisBlockReason)}>{isAnalyzing?<><Loader2 className="w-5 h-5 animate-spin"/>{engineState==='loading'?'載入分析引擎...':`分析中 ${analysisProgress}%`}</>:'開始分析'}</button>
+            <button id="btn-start-analysis" type="button" className="btn-primary" onClick={()=>void handleStartAnalysis()} disabled={Boolean(analysisBlockReason)}>{isAnalyzing?<><Loader2 className="w-5 h-5 animate-spin"/>{engineState==='loading'?'載入分析引擎...':`分析中 ${analysisProgress}%`}</>:'開始分析'}</button>
           </>}
           {step==='result'&&<div className="grid grid-cols-2 gap-2">
             <button id="btn-back-mark" type="button" className="btn-secondary" onClick={()=>go('mark')}><RotateCcw size={18}/>重新標記</button>
             <button id="btn-new-video" type="button" className="btn-secondary" onClick={()=>go('video')}><UploadCloud size={18}/>換影片</button>
           </div>}
         </div>
-      </nav>
+      </nav>}
 
-      <ScientificInfoPanel open={scienceOpen} onClose={()=>setScienceOpen(false)} result={matchedResult} quality={videoQuality} fileName={videoFileName} fps={videoFps} onDatabase={openDatabase} onCode={openCode} timingNote={videoTiming?.timingWarning}/>
+      <ScientificInfoPanel open={scienceOpen} onClose={()=>setScienceOpen(false)} result={matchedResult} quality={videoQuality} fileName={videoFileName} fps={videoFps} onDatabase={openDatabase} onCode={openCode} timingNote={videoTiming?.timingWarning}
+        timing={videoTiming} timingConfirmed={sourceTimesValid} onChangeFps={()=>{setScienceOpen(false);setFpsDialogOpen(true);}} version={APP_VERSION}
+        advanced={<GroundCalibration video={videoElementRef.current} hasVideo={Boolean(userVideoUrl)} disabled={busy} geometry={cameraGeometry} onApply={g=>{setCameraGeometry(g);setHasAnalyzed(false);}} onClear={()=>{setCameraGeometry(null);setHasAnalyzed(false);}}/>}/>
+      {(needFps||fpsDialogOpen)&&<FpsDialog error={fpsError} onPick={pickFps} onCancel={needFps?cancelFps:()=>{setFpsDialogOpen(false);setFpsError(null);}}/>}
       {isDbModalOpen&&!database&&<div className="fixed inset-0 z-50 bg-slate-950/80 flex items-center justify-center p-4" role="status"><p className="card text-sm flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin"/>載入參考資料庫...</p></div>}
       {database&&<DatabaseModal isOpen={isDbModalOpen} onClose={()=>setIsDbModalOpen(false)} database={database}/>}
       {isCodeModalOpen&&!pythonSource&&<div className="fixed inset-0 z-50 bg-slate-950/80 flex items-center justify-center p-4" role="status"><p className="card text-sm flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin"/>載入原始碼...</p></div>}

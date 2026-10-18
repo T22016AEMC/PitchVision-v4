@@ -1,11 +1,12 @@
-import React,{useEffect} from 'react';
+import React,{useEffect,ReactNode} from 'react';
 import {X} from 'lucide-react';
 import {MetricsPanel} from './MetricsPanel';
 import {VideoQualityCard} from './VideoQualityCard';
-import {MatchResult} from '../types';
+import {MatchResult,VideoTiming} from '../types';
+import {formatSourceFps} from '../services/sourceTiming';
 import {VideoQualityAssessment} from '../services/videoMetadataService';
 
-export function ScientificInfoPanel({open,onClose,result,quality,fileName,fps,onDatabase,onCode,timingNote}:{open:boolean;onClose:()=>void;result:MatchResult|null;quality:VideoQualityAssessment|null;fileName:string;fps:number;onDatabase:()=>void;onCode:()=>void;timingNote?:string}) {
+export function ScientificInfoPanel({open,onClose,result,quality,fileName,fps,onDatabase,onCode,timingNote,timing,timingConfirmed,onChangeFps,advanced,version}:{open:boolean;onClose:()=>void;result:MatchResult|null;quality:VideoQualityAssessment|null;fileName:string;fps:number;onDatabase:()=>void;onCode:()=>void;timingNote?:string;timing?:VideoTiming|null;timingConfirmed?:boolean;onChangeFps?:()=>void;advanced?:ReactNode;version?:string}) {
   useEffect(()=>{if(!open)return;const key=(e:KeyboardEvent)=>{if(e.key==='Escape')onClose();};window.addEventListener('keydown',key);document.body.style.overflow='hidden';return()=>{window.removeEventListener('keydown',key);document.body.style.overflow='';};},[open,onClose]);
   if(!open)return null;
   return <section id="science-center" role="dialog" aria-modal="true" aria-label="科學資訊中心" className="fixed inset-0 z-40 bg-slate-950 overflow-y-auto overscroll-contain">
@@ -27,7 +28,16 @@ export function ScientificInfoPanel({open,onClose,result,quality,fileName,fps,on
       {result?.spatial_calibration?.camera_geometry&&<p className="text-xs break-words">攝影幾何：{result.spatial_calibration.camera_geometry.method}；{result.spatial_calibration.camera_geometry.limitations.join('；')}</p>}
       {result?.uncertainty&&<p className="text-xs">不確定度依據：{result.uncertainty.uncertainty_basis}；保留的原模型範圍是候選先驗敏感度，不是實测精度信賴區間。</p>}
       {quality&&<VideoQualityCard assessment={quality} videoFileName={fileName} actualFps={fps}/>}
+      {timing&&<div id="timing-info" className="card space-y-2 text-xs text-slate-300">
+        <h3 className="card-title">影片時間資訊（技術細節）</h3>
+        <p>FPS {formatSourceFps(fps)} · {timingConfirmed?(timing.timeBase==='timestamp'?'由容器 PTS 讀取':'使用者指定（CFR 假設）'):'尚未確認'}</p>
+        <p className="break-words">來源：{timing.fpsSource} · {timing.isVFR?'VFR':'CFR'} · 時間基準：{timing.timeBase} · {timing.timingReliable?'時間表已取得':'時間未確認'} · 來源位置數：{timing.timestamps.length}</p>
+        {timing.timingWarning&&<p className="break-words text-amber-200">{timing.timingWarning}</p>}
+        {onChangeFps&&timing.fpsSource!=='container_timestamps'&&<button type="button" id="btn-change-fps" onClick={onChangeFps} className="btn-secondary">重新指定拍攝 FPS</button>}
+      </div>}
+      {advanced}
       <MetricsPanel matchedResult={result||undefined}/>
+      {version&&<p className="text-[11px] text-slate-500 text-center">PitchVision 手機版 {version} · 引擎 V4.7</p>}
     </div>
   </section>;
 }

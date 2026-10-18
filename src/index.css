@@ -58,21 +58,50 @@ details[open] > summary::after { transform: rotate(180deg); }
 .tag-model { background: rgba(79, 70, 229, .25); color: #c7d2fe; }
 .tag-db { background: rgba(217, 119, 6, .22); color: #fcd34d; }
 
-/* Video player */
-.btn-play { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; min-height: 48px; border-radius: 12px; background: #2563eb; font-weight: 700; }
-.timeline-range { touch-action: none; width: 100%; min-height: 44px !important; }
-#manual-controls { overflow-anchor: none; }
-.frame-step { display: flex; align-items: center; justify-content: center; gap: 2px; min-height: 52px; border-radius: 12px; background: #1e293b; border: 1px solid #475569; font-weight: 800; font-size: 15px; }
-.mark-btn { display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 52px; border-width: 1px; border-radius: 12px; font-weight: 700; }
+/* Video player: fullscreen marking, inline result view and compact analysis preview */
+.timeline-range { touch-action: none; min-height: 44px !important; }
 .jump-btn { justify-content: flex-start; text-align: left; font-size: .75rem; font-weight: 500; overflow-wrap: anywhere; }
 .mode-toggle { min-height: 48px; padding: 8px 12px; font-size: 15px; font-weight: 700; border: 1px solid #475569; border-radius: 10px; background: #0f172a; color: #cbd5e1; }
 .mode-toggle.mode-active { background: #164e63; color: #ecfeff; border: 2px solid #22d3ee; }
+.player-fixed { position: fixed; inset: 0; z-index: 40; background: #000; }
+.player-root, .player-full { width: 100%; }
+.player-full, .player-full > .player-stage { height: 100%; }
+.ov-layer { position: absolute; inset: 0; z-index: 20; pointer-events: none; display: flex; flex-direction: column; justify-content: space-between; gap: 8px; padding: calc(env(safe-area-inset-top, 0px) + 8px) 10px calc(env(safe-area-inset-bottom, 0px) + 10px); }
+.player-inline .ov-layer { padding: 8px 10px 10px; }
+.ov-layer > * { pointer-events: none; }
+.ov-layer.ov-hidden > * { visibility: hidden; }
+.ov-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 6px; }
+.ov-top > * { pointer-events: auto; }
+.ov-cluster { display: flex; gap: 6px; flex-shrink: 0; }
+.ov-bottom { display: flex; flex-direction: column; gap: 8px; }
+.ov-pill { min-height: 44px; padding: 0 12px; border-radius: 999px; background: rgba(2, 6, 23, .62); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); border: 1px solid rgba(148, 163, 184, .5); color: #fff; font-size: 13px; font-weight: 700; white-space: nowrap; max-width: 36%; overflow: hidden; text-overflow: ellipsis; }
+.ov-pill-release { border-color: #f87171; }
+.ov-pill-release-on { background: rgba(153, 27, 27, .72); border-color: #fca5a5; }
+.ov-pill-glove { border-color: #fb923c; }
+.ov-pill-glove-on { background: rgba(154, 52, 18, .72); border-color: #fdba74; }
+.ov-icon { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; border-radius: 999px; background: rgba(2, 6, 23, .62); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); border: 1px solid rgba(148, 163, 184, .5); color: #fff; }
+.ov-chip { display: inline-block; max-width: 100%; padding: 2px 8px; border-radius: 999px; background: rgba(2, 6, 23, .66); color: #e2e8f0; font-size: 11px; line-height: 1.5; pointer-events: none; }
+.ov-step { display: inline-flex; align-items: center; justify-content: center; min-width: 60px; min-height: 48px; padding: 0 8px; border-radius: 14px; background: rgba(2, 6, 23, .7); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); border: 1px solid rgba(148, 163, 184, .55); color: #fff; font-weight: 800; font-size: 14px; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.ov-step:active { background: rgba(8, 145, 178, .7); }
+.ov-next { display: inline-flex; align-items: center; min-height: 44px; padding: 0 14px; border-radius: 999px; font-weight: 800; color: #fff; background: linear-gradient(90deg, #2563eb, #0891b2); flex-shrink: 0; }
+.ov-banner { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 8px 10px; border-radius: 14px; border: 1px solid #22d3ee; background: rgba(2, 6, 23, .8); color: #cffafe; }
+.ov-banner .ov-pill { max-width: 100%; min-height: 44px; }
+.ov-reveal { position: absolute; left: 50%; bottom: calc(env(safe-area-inset-bottom, 0px) + 12px); transform: translateX(-50%); z-index: 25; min-height: 44px; padding: 0 16px; border-radius: 999px; font-size: 12px; color: #cbd5e1; background: rgba(2, 6, 23, .5); opacity: .6; }
+.ov-sheet-wrap { position: absolute; inset: 0; z-index: 30; display: flex; align-items: flex-end; background: rgba(0, 0, 0, .45); }
+.ov-sheet { width: 100%; max-height: 74%; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 12px; padding: 14px 14px calc(env(safe-area-inset-bottom, 0px) + 14px); border-radius: 18px 18px 0 0; background: #0f172a; border-top: 1px solid #334155; }
+.ov-dot { position: absolute; transform: translate(-50%, -50%); border-radius: 999px; pointer-events: none; }
+.ov-observed { width: 22px; height: 22px; border: 3px solid #22d3ee; background: rgba(34, 211, 238, .22); box-shadow: 0 0 0 2px rgba(0, 0, 0, .55); }
+.ov-estimated { width: 22px; height: 22px; border: 2px dashed #fbbf24; box-shadow: 0 0 0 1px rgba(0, 0, 0, .55); }
+.ov-trail { width: 6px; height: 6px; background: #22d3ee; opacity: .7; }
+.ov-legend { display: inline-block; border-radius: 999px; margin: 0 3px 0 2px; vertical-align: middle; }
+.ov-legend.ov-observed, .ov-legend.ov-estimated { width: 10px; height: 10px; border-width: 2px; box-shadow: none; }
+.assist-note { position: fixed; left: 12px; right: 12px; bottom: calc(env(safe-area-inset-bottom, 0px) + 100px); z-index: 46; padding: 8px 12px; border-radius: 12px; background: rgba(120, 53, 15, .92); color: #fef3c7; font-size: 13px; }
 
-/* Result screen: fit the unchanged PitchVisualizer (640×480 canvas) to the phone width. */
-#result-screen #pitch-visualizer-container .video-stage { height: auto !important; min-height: 0 !important; max-height: none !important; flex-direction: column; align-items: stretch; border-width: 1px; }
-#result-screen #pitch-canvas { height: auto !important; }
-#result-screen #pitch-visualizer-container .video-stage > .absolute { position: static; width: 100%; max-width: none; border-width: 1px 0 0; border-radius: 0; }
-#result-screen #pitch-visualizer-container button { white-space: normal; }
+/* Unchanged PitchVisualizer (640×480 canvas) fitted to the phone width. */
+#pitch-visualizer-container .video-stage { height: auto !important; min-height: 0 !important; max-height: none !important; flex-direction: column; align-items: stretch; border-width: 1px; }
+#pitch-canvas { height: auto !important; }
+#pitch-visualizer-container .video-stage > .absolute { position: static; width: 100%; max-width: none; border-width: 1px 0 0; border-radius: 0; }
+#pitch-visualizer-container button { white-space: normal; }
 .metrics-compact .science-detail { display: none; }
 
 /* Legacy modals (database / Python source) on narrow screens */

@@ -63,6 +63,6 @@ export const PitcherSetupCard:React.FC<PitcherSetupCardProps>=({biometrics,onCha
       <div className="stat"><dt>出手延伸量</dt><dd>{biometrics.calculatedExtensionM} m</dd></div>
       <div className="stat"><dt>出手→進手套距離</dt><dd className="text-cyan-200">{biometrics.effectiveTravelDistanceM} m</dd></div>
     </dl>
-    <p className="text-[11px] text-slate-400">距離＝18.44 m − 延伸量 + 0.90 m（V4.7 引擎公式，以標準投手板距離為基準）。地面有已知長度標記時，可在「標記」步驟的選填校正輸入實際長度。</p>
+    <p className="text-[11px] text-slate-400">距離＝18.44 m − 延伸量 + 0.90 m（V4.7 引擎公式，以標準投手板距離為基準）。身高與距離是程式校正尺度的依據，請盡量填準確。</p>
   </div>;
 };

@@ -56,7 +56,9 @@ export interface AnalysisHooks {
 }
 
 export type AnalysisOutcome=
-  | {status:'done';result:MatchResult;velocityKmh:number;flightSeconds:number;flightFrames:number}
+  | {status:'done';result:MatchResult;velocityKmh:number;flightSeconds:number;flightFrames:number;
+     /** Raw per-frame ball detections inside the marked window; display only, never fed back into the engine. */
+     detections:BaseballTrackPoint[];trackingRan:boolean}
   | {status:'stale';message?:string};
 
 const pause=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
@@ -175,5 +177,6 @@ export async function runPitchAnalysis(input:AnalysisInput,hooks:AnalysisHooks):
   computed.original_flight_frames=originalFlightFrames;
   computed.tracking_evidence=sparseResult?.evidence??{sourceFrames:0,attemptedFrames:0,verifiedFrames:0,unverifiedFrames:0,observationCount:0,excludedFrames:0,trackFound:false,trackReliable:false,reason:trackingMessage};
   computed.confidence_scores.quality_notes.push(trackingMessage);
-  return {status:'done',result:computed,velocityKmh,flightSeconds,flightFrames};
+  const detections=(sparseResult?.observations||[]).filter(p=>p.timestamp>=events.release!.timeSec&&p.timestamp<=events.glove!.timeSec);
+  return {status:'done',result:computed,velocityKmh,flightSeconds,flightFrames,detections,trackingRan:Boolean(sparseResult)};
 }
