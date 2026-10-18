@@ -29,19 +29,20 @@ export function parseMoovTiming(buffer:ArrayBuffer):VideoTiming|null {
     const stsz=child(v,stbl,'stsz');if(stsz&&u32(v,stsz.data+8,stsz)!==pts.length)throw Error('MP4樣本數與來源時間表不一致');
     const ctts=child(v,stbl,'ctts');if(ctts){let index=0;for(let i=0,n=u32(v,ctts.data+4,ctts);i<n;i++){
       const count=u32(v,ctts.data+8+i*8,ctts),p=ctts.data+12+i*8;u32(v,p,ctts);
-      const offset=v.getUint8(ctts.data)===1?v.getInt32(p):v.getUint32(p);
+      // Always signed: Apple writes negative composition offsets in version 0 boxes too; an unsigned read turns -25 into ~2^32.
+      const offset=v.getInt32(p);
       if(index+count>pts.length)throw Error('CTTS 影格數不一致');for(let j=0;j<count;j++)pts[index++]+=offset;
     }if(index!==pts.length)throw Error('CTTS sample count 不一致');}
-    let shift=0;const edts=child(v,trak,'edts'),elst=edts?child(v,edts,'elst'):null;
+    let shift=0,windowEnd=Infinity;const edts=child(v,trak,'edts'),elst=edts?child(v,edts,'elst'):null;
     if(elst){const ver=v.getUint8(elst.data),size=ver===1?20:12;let empty=0;
       const count=u32(v,elst.data+4,elst);let mediaEdits=0;
       for(let i=0;i<count;i++){const p=elst.data+8+i*size;if(p+size>elst.end)throw Error('截斷 edit list');
         const duration=ver===1?Number(v.getBigUint64(p)):v.getUint32(p),media=ver===1?Number(v.getBigInt64(p+8)):v.getInt32(p+4);
         const rate=v.getInt16(p+(ver===1?16:8));if(rate!==1)throw Error('非正常速率 edit list，需人工確認時間');
-        if(media===-1)empty+=duration/(movieScale||scale);else{mediaEdits++;shift=empty-media/scale;}
+        if(media===-1)empty+=duration/(movieScale||scale);else{mediaEdits++;shift=empty-media/scale;windowEnd=duration>0?empty+duration/(movieScale||scale):Infinity;} // the edit's segment duration also trims the tail
       }if(mediaEdits>1)throw Error('多段 edit list 尚不支援，請匯出單段影片');
     }
-    const presentation=pts.map((p,i)=>({t:p/scale+shift,dt:deltas[i]/scale})).filter(p=>p.t>=-1e-7).sort((a,b)=>a.t-b.t);
+    const presentation=pts.map((p,i)=>({t:p/scale+shift,dt:deltas[i]/scale})).filter(p=>p.t>=-1e-7&&p.t<windowEnd-1e-7).sort((a,b)=>a.t-b.t);
     const timestamps=presentation.map(p=>Math.max(0,p.t));
     if(timestamps.length<2||timestamps.some((t,i)=>i>0&&t<=timestamps[i-1]))throw Error('影片時間戳重複或不連續');
     const durationSec=presentation.at(-1)!.t+presentation.at(-1)!.dt;
